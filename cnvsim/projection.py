@@ -79,6 +79,22 @@ def _read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, sep=separator, low_memory=False)
 
 
+def _concat_preserving_all_na_columns(
+    frames: list[pd.DataFrame],
+) -> pd.DataFrame:
+    """Concatenate heterogeneous frames without pandas all-NA dtype warnings."""
+
+    columns = list(
+        dict.fromkeys(column for frame in frames for column in frame.columns)
+    )
+    populated = [frame.dropna(axis=1, how="all") for frame in frames]
+    result = pd.concat(populated, ignore_index=True, sort=False)
+    for column in columns:
+        if column not in result:
+            result[column] = pd.NA
+    return result.reindex(columns=columns)
+
+
 def _normalize_chromosome(values: pd.Series) -> pd.Series:
     return (
         values.astype(str)
@@ -1214,7 +1230,7 @@ def _project_gene_fractions_impl(
         if not conditional_neighbors.empty:
             neighbor_parts.append(conditional_neighbors)
 
-    assignments = pd.concat(assignment_parts, ignore_index=True, sort=False)
+    assignments = _concat_preserving_all_na_columns(assignment_parts)
     if assignments["sample_id"].astype(str).duplicated().any():
         duplicates = assignments[
             assignments["sample_id"].astype(str).duplicated(keep=False)
