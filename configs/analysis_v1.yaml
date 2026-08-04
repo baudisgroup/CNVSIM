@@ -1,0 +1,164 @@
+# Canonical CNVSIM subtype-discovery and parameter-selection settings.
+
+run_name: analysis_v1
+
+# C76 is an ill-defined topography bucket reserved for out-of-scope projection.
+excluded_roots: [C76]
+
+ir:
+  n_dims: 50
+
+knn:
+  selection:
+    metrics: [euclidean, cosine]
+    n_pcs: [10, 20, 30, 50]
+    k: [30, 50, 80]
+
+    # Graph-health requirements.
+    min_giant_frac: 0.99
+    max_components: 2
+
+    # Platform composition is monitored during graph selection. Candidate
+    # graphs within this distance of the lowest enrichment are treated as
+    # comparable before applying conservative graph preferences.
+    max_platform_enrichment: null
+    platform_enrichment_tolerance: 0.05
+    preferred_metrics: [cosine, euclidean]
+    preferred_k: [80, 50, 30]
+    preferred_n_pcs: [30, 50]
+
+    # Morphology coherence is reported but does not constrain graph selection.
+    max_morph_purity_drop: null
+
+    leiden_scan_enabled: true
+    leiden_scan_top_n: 6
+    sigma_quantile: 0.90
+    make_undirected: true
+    combine_mode: max
+
+leiden:
+  seeds: [0, 1, 2, 3, 4]
+
+  # Minimum size of a released reference context. Smaller graph communities
+  # are marked as outliers rather than interpreted as subtypes.
+  min_cluster_size: 200
+  max_frac_in_small: 0.02
+  max_giant_frac: 0.99
+  min_ari: 0.80
+
+  selection_policy: stable_plateau
+  selection_score_tolerance: 0.02
+  min_resolution_neighbor_ari: 0.85
+  min_plateau_points: 2
+
+  # Platform association is an eligibility guardrail, not a score term.
+  platform_assoc_weight: 0.0
+  platform_assoc_max: 0.35
+
+  resolution_grid:
+    r_min: 1.0e-4
+    r_max: 5.0e-2
+    n_broad: 15
+    n_fine: 12
+
+subsampling:
+  sample_fraction: 0.80
+  repeats: 20
+  random_seed: 1701
+  partition_seed: 0
+  max_candidates_per_root: 6
+
+  min_subsample_ari: 0.80
+  min_matched_fraction: 0.80
+  min_eval_coverage: 0.95
+  min_context_recall_q10: 0.70
+
+  # A candidate is reusable only if every full-data context remains locally
+  # identifiable across subsamples. These thresholds apply to the worst
+  # context-specific repeat-level 10th percentile.
+  min_worst_context_precision_q10: 0.50
+  min_worst_context_jaccard_q10: 0.50
+
+  min_cluster_count_ratio: 0.75
+  max_cluster_count_ratio: 1.25
+
+  # Define a stability-equivalent band, then select the most robust qualified
+  # resolution plateau. Cluster count is used only as a final tie-breaker.
+  one_se_multiplier: 1.0
+
+refinement:
+  # Initial communities are merged only when they are locally adjacent,
+  # repeatedly co-merge after subsampling, and lack signature evidence that
+  # would justify keeping the boundary.
+  min_comerge_rate: 0.50
+  centroid_distance_quantile: 0.25
+  min_context_precision_q10: 0.50
+  min_context_jaccard_q10: 0.50
+  burden_median_delta: 0.10
+  technical_top_fraction: 0.80
+  technical_enrichment_ratio: 1.50
+
+  # Context-vs-rest signatures annotate a context but do not automatically
+  # validate every boundary touching it. A merge is vetoed only when the two
+  # candidate contexts differ directly on supported Track 1/Track 2 features.
+  track1_pair_min_abs_median_delta: 0.10
+  track2_pair_min_abs_adjusted_delta: 0.10
+  track2_pair_min_abs_prevalence_delta: 0.10
+  track2_pair_veto_requires_architecture_or_high_level: true
+  min_final_context_size: 200
+  min_final_contexts: 2
+
+# Refined communities become projection anchors only when they are recovered
+# consistently across repeated subsamples. Conditional metrics are evaluated
+# only in repeats where the community is independently detected.
+reference_contexts:
+  min_detection_rate: 0.90
+  min_conditional_recall_q10: 0.70
+  min_conditional_precision_q10: 0.50
+  min_conditional_jaccard_q10: 0.50
+  min_context_size: 200
+  anchor_coverage_warning: 0.80
+  # C47 has no reproducible within-root subtype partition. It remains usable
+  # only as a root-level reference and is not counted as a CNV subtype.
+  root_only_fallback_roots: [C47]
+
+projection:
+  # Context-specific confidence and distance limits are estimated from
+  # leave-one-out projections of correctly recovered anchor members.
+  lower_confidence_quantile: 0.10
+  upper_distance_quantile: 0.95
+  min_correct_calibration_samples: 20
+  min_context_loo_accuracy: 0.80
+  top_candidates: 5
+
+signatures:
+  min_platform_samples: 20
+
+  # Track 1: context-vs-rest chromosome coverage evidence.
+  track1_q_cut: 0.05
+  track1_min_abs_median_delta: 0.10
+  track1_min_abs_auc_shift: 0.10
+  track1_min_platform_delta: 0.05
+  track1_min_platforms_supporting: 2
+
+  # Track 2: burden-adjusted gene evidence, retaining four amplitude channels.
+  track2_top_n: 30
+  track2_q_cut: 0.05
+  track2_min_abs_prevalence_delta: 0.05
+  track2_min_abs_auc_shift: 0.10
+  track2_min_platforms_supporting: 2
+  track2_min_platform_support_fraction: 0.6666667
+  track2_max_auc_gap: 0.15
+
+validation:
+  outlier_label: -1
+  min_samples: 200
+  test_size: 0.25
+  random_state: 0
+  top_k_per_cluster_event: 30
+  q_cut: 0.05
+  do_within_platform: true
+  do_lopo: false
+  lr_C: 0.5
+  max_iter: 50000
+  n_jobs: 1

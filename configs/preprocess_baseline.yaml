@@ -1,0 +1,33 @@
+run_name: preprocess_v1_baseline
+pipeline:
+  mode: baseline
+filters:
+  excluded_roots:
+    - C80
+encoding:
+  min_samples_per_family: 50
+  min_altered_genes_per_sample: 1
+  low_frac_threshold: 0.1
+  high_frac_threshold: 0.2
+  stable_gene_coverage: 0.95
+  autosomes_only: true
+firstpass:
+  random_state: 0
+  n_pcs: 50
+  umap:
+    n_neighbors: 30
+    min_dist: 0.1
+    metric: cosine
+  hdbscan:
+    min_cluster_size: 200
+    min_samples: 50
+  technical:
+    max_rel_cluster_size: 0.1
+    min_platform_dominance: 0.9
+    max_top_morph_frac: 0.5
+stage2a:
+  n_pcs: 50
+  plat_eval_pcs: 10
+  min_per_class: 50
+  random_state: 0
+  feature_scaling: standard

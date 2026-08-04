@@ -1,0 +1,18 @@
+# Leakage-controlled evaluation of projection against frozen atlas labels.
+holdout:
+  # Fold 0 is the independent 20% test set. The remaining folds fit the
+  # train-only representation and calibrate the frozen atlas labels.
+  n_folds: 5
+  test_fold: 0
+  random_seed: 2701
+  min_train_per_context: 160
+
+# Five complementary 80/20 folds under fixed atlas discovery parameters.
+signature_recovery:
+  # Every sample is held out exactly once. Full-atlas context labels are used
+  # only to balance folds and evaluate recovery, never to build fold graphs.
+  n_folds: 5
+  random_seed: 7301
+
+  # Cosine similarity is undefined with fewer observed target features.
+  min_effect_features: 2
