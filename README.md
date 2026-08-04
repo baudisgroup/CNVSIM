@@ -105,7 +105,7 @@ Q002	8	12700000	14500000	high_gain
 ### Run projection
 
 ```bash
-python run_scripts/project_samples.py \
+python -m run_scripts.project_samples \
   --bundle-dir "$CNVSIM_DATA/projection_bundle" \
   --samples /path/to/samples.tsv \
   --segments /path/to/segments.tsv \
@@ -131,6 +131,103 @@ considered only when the core result is ambiguous or unresolved and the root
 has an eligible conditional reference. The complete subtype catalogue and its
 enriched Track 1 chromosome-scale and Track 2 gene-level signatures are
 available under `atlas/` in the data release.
+
+## Retrieve and project a Progenetix example
+
+The test module can query projectable tumour or cancer cell-line CNV analyses
+from the public Progenetix/bycon Beacon API and convert selected analyses into
+the two CNVSIM input tables.
+
+```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}}}%%
+flowchart LR
+    query["1. Search<br/>ICD-O or biosample ID"] --> api["2. Query bycon<br/>Beacon API"]
+    api --> review["3. Select analyses<br/>candidates.tsv"]
+    review --> variants["4. Retrieve selected CNVs<br/>g_variants"]
+    variants --> inputs["5. Build inputs<br/>samples.tsv + segments.tsv"]
+    inputs --> output["6. Project to CNVSIM<br/>assignment + nearest references"]
+```
+
+Start by listing candidate analyses; this example uses stomach topography and
+includes descendant ICD-O terms:
+
+```bash
+export EXAMPLE_OUT=/path/to/progenetix_example
+
+python tests/progenetix_retrieval_example/query_candidates.py \
+  --resource tumour \
+  --filter pgx:icdot-C16 \
+  --include-descendants \
+  --limit 20 \
+  --release-dir "$CNVSIM_DATA" \
+  --out "$EXAMPLE_OUT/candidates.tsv" \
+  --overwrite
+```
+
+Review `candidates.tsv` and enter `yes` in the `selected` column for one or
+more analyses. The overlap columns report whether an analysis is already part
+of the released atlas; they are informational and do not prevent projection.
+Convert the selected rows and run the standard projection interface:
+
+```bash
+python tests/progenetix_retrieval_example/prepare_projection_inputs.py \
+  --selection "$EXAMPLE_OUT/candidates.tsv" \
+  --out-dir "$EXAMPLE_OUT/input" \
+  --overwrite
+
+python -m run_scripts.project_samples \
+  --bundle-dir "$CNVSIM_DATA/projection_bundle" \
+  --samples "$EXAMPLE_OUT/input/samples.tsv" \
+  --segments "$EXAMPLE_OUT/input/segments.tsv" \
+  --out-dir "$EXAMPLE_OUT/projection" \
+  --overwrite
+```
+
+Use `--resource cell-line` to query the cancercelllines dataset, or one or more
+`--biosample-id` arguments to retrieve specified biosamples directly.
+
+For example, the following command retrieves CNV analyses for two specified
+Progenetix tumour biosamples without running a topography filter:
+
+```bash
+python tests/progenetix_retrieval_example/query_candidates.py \
+  --resource tumour \
+  --biosample-id pgxbs-kftviyx8 \
+  --biosample-id pgxbs-kftvk2uk \
+  --release-dir "$CNVSIM_DATA" \
+  --out "$EXAMPLE_OUT/selected_biosamples.tsv" \
+  --overwrite
+```
+
+The helper sends HTTP `GET` requests
+to the [bycon-powered Progenetix Beacon v2
+API](https://docs.progenetix.org/common/beacon-api/) using these endpoint
+patterns:
+
+- `/beacon/biosamples?filters=...` finds currently retrievable biosamples;
+- `/beacon/biosamples/{biosample_id}/analyses?limit=0` lists their analyses;
+- `/beacon/biosamples/{biosample_id}/g_variants?limit=0` retrieves CNV records.
+
+For an exact biosample query, the first request instead uses
+`/beacon/biosamples?biosampleIds=...`. Cell-line requests additionally set
+`datasetIds=cellz`. The converter keeps only GRCh38 CNV records on chromosomes
+1-22. If a biosample has multiple analyses, it uses
+`caseLevelData.analysisId` to assign each CNV to the selected analysis and
+prevents profiles from different analyses from being mixed.
+
+### Projection smoke test
+
+The test retrieves three fixed public Progenetix analyses
+and verifies core assignment, conditional routing, unresolved handling,
+nearest-reference output:
+
+```bash
+CNVSIM_DATA="$CNVSIM_DATA" \
+CNVSIM_RUN_NETWORK_TESTS=1 \
+python -m unittest tests.progenetix_retrieval_example.test_projection -v
+```
+
+The test will write to a temporary directory.
 
 ## Query Cellosaurus cell lines
 
@@ -173,6 +270,7 @@ distance to the matched subtype.
 | `run_scripts/analysis/` | Atlas construction and reference-projection workflows. |
 | `run_scripts/validation/` | Projection and signature-recovery validation runners. |
 | `run_scripts/figures/` | Runners used to produce manuscript figures. |
+| `tests/progenetix_retrieval_example/` | Public bycon retrieval example and live projection smoke test. |
 
 ## Citation
 
@@ -186,7 +284,8 @@ release:
 
 - **Progenetix** — source of the harmonized tumour and cancer cell-line CNV
   profiles and associated metadata used to construct the atlas and cell-line
-  catalogue. Huang Q, Carrio-Cordo P, Gao B, Paloots R, Baudis M. [The
+  catalogue, and host of the bycon-powered Beacon API used by the retrieval
+  example. Huang Q, Carrio-Cordo P, Gao B, Paloots R, Baudis M. [The
   Progenetix oncogenomic resource in
   2021](https://doi.org/10.1093/database/baab043). *Database*. 2021;2021:baab043.
 - **cancercelllines.org** — description of the curated cancer cell-line
