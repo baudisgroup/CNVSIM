@@ -955,7 +955,7 @@ def _draw_model_match(axis: plt.Axes, target: pd.DataFrame) -> None:
     axis.axvline(1.0, color=ORANGE, linestyle="--", linewidth=1.0)
     axis.set_xlim(0, 1.05)
     axis.set_xlabel("Fraction of maximum accepted distance\n(lower = closer)")
-    axis.set_title("CNV-context similarity", fontweight="bold", pad=7)
+    axis.set_title("CNV-subtype similarity", fontweight="bold", pad=7)
     axis.tick_params(axis="y", length=0)
     _style_axis(axis)
 

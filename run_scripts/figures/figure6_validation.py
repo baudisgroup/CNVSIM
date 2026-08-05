@@ -98,6 +98,12 @@ def _read_parquet(
     return frame
 
 
+def _read_table(path: Path, required: set[str], name: str) -> pd.DataFrame:
+    if path.suffix.lower() == ".parquet":
+        return _read_parquet(path, required, name)
+    return _read_tsv(path, required, name)
+
+
 def _style_axis(axis: plt.Axes, *, grid_axis: str = "x") -> None:
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
@@ -136,6 +142,49 @@ def _ordered_core_references(references: pd.DataFrame) -> pd.DataFrame:
     return core.sort_values(
         ["root_order", "context_number", "reference_key"]
     ).reset_index(drop=True)
+
+
+def _build_core_technical_composition(
+    assignments: pd.DataFrame,
+    metadata: pd.DataFrame,
+) -> pd.DataFrame:
+    anchors = assignments.loc[
+        assignments["pipeline_status"].astype(str).eq("anchor_member"),
+        ["analysis_id", "root", "assigned_reference_key"],
+    ].copy()
+    if anchors.empty:
+        raise ValueError("Release assignments contain no core definition samples")
+    if anchors["analysis_id"].duplicated().any():
+        raise ValueError("Core definition assignments contain duplicate analysis IDs")
+    if anchors["assigned_reference_key"].isna().any():
+        raise ValueError("A core definition sample is missing its reference subtype")
+
+    metadata_columns = [
+        "analysis_id",
+        "platform_id",
+        "platform_label",
+        "source_group_refined",
+    ]
+    if metadata["analysis_id"].duplicated().any():
+        raise ValueError("Analysis metadata contain duplicate analysis IDs")
+    composition = anchors.merge(
+        metadata[metadata_columns],
+        on="analysis_id",
+        how="left",
+        validate="one_to_one",
+        indicator=True,
+    )
+    missing_metadata = composition["_merge"].ne("both")
+    if missing_metadata.any():
+        example = composition.loc[missing_metadata, "analysis_id"].iloc[0]
+        raise ValueError(
+            "Core definition samples are missing analysis metadata; "
+            f"first missing analysis: {example}"
+        )
+    composition = composition.drop(columns="_merge").rename(
+        columns={"assigned_reference_key": "full_reference_key"}
+    )
+    return composition
 
 
 def draw_technical_composition(
@@ -308,7 +357,7 @@ def draw_technical_composition(
         cax=color_axis,
         orientation="vertical",
     )
-    colorbar.set_label("Held-out sample fraction", labelpad=5)
+    colorbar.set_label("Within-subtype sample fraction", labelpad=5)
     colorbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8])
     colorbar.set_ticklabels(["0", "0.2", "0.4", "0.6", "≥0.8"])
     colorbar.outline.set_visible(False)
@@ -535,7 +584,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--release-dir", required=True, type=Path)
     parser.add_argument("--signature-recovery-dir", type=Path)
-    parser.add_argument("--technical-composition", required=True, type=Path)
+    parser.add_argument("--analysis-metadata", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -573,18 +622,27 @@ def main() -> None:
         {"reference_key", "root", "reference_level"},
         "reference contexts",
     )
-    composition = _read_parquet(
-        args.technical_composition.expanduser().resolve(),
+    assignments = _read_parquet(
+        release_dir / "tables" / "analysis_assignments.parquet",
         {
             "analysis_id",
             "root",
-            "full_reference_key",
+            "pipeline_status",
+            "assigned_reference_key",
+        },
+        "release assignments",
+    )
+    metadata = _read_table(
+        args.analysis_metadata.expanduser().resolve(),
+        {
+            "analysis_id",
             "platform_id",
             "platform_label",
             "source_group_refined",
         },
-        "holdout technical composition",
+        "analysis metadata",
     )
+    composition = _build_core_technical_composition(assignments, metadata)
     root_recovery = _read_tsv(
         recovery_dir / "root_signature_recovery.tsv",
         {
@@ -613,6 +671,11 @@ def main() -> None:
         outputs["B"],
     )
     print("[CNVSIM] Figure 6 validation panels complete")
+    print(
+        "  core definition composition: "
+        f"{len(composition):,} analyses across "
+        f"{composition['full_reference_key'].nunique()} subtypes"
+    )
     for label, path in outputs.items():
         print(f"  {label}: {path}")
 

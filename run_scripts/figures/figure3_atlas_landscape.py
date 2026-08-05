@@ -839,7 +839,7 @@ def draw_root_diagnostic_heterogeneity(
     axis.invert_yaxis()
     subtype_column_x = 1.075
     axis.set_xlim(0, 1.15)
-    axis.set_xlabel("Median dominant-label fraction across contexts")
+    axis.set_xlabel("Median dominant-label fraction across subtypes")
     axis.legend(
         loc="lower left",
         bbox_to_anchor=(0.02, 1.005),
