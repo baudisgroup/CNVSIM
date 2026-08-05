@@ -52,7 +52,7 @@ The data release includes its own README with an embedded data dictionary and ma
 
 ## Installation
 
-Clone the repository and create the frozen Conda environment:
+Clone the repository and create the frozen Conda environment (recommended):
 
 ```bash
 git clone https://github.com/baudisgroup/CNVSIM.git
@@ -60,6 +60,20 @@ cd CNVSIM
 conda env create -f environment.yml
 conda activate cnvsim
 ```
+
+If Conda is not available, use Python 3.10 and a standard virtual environment.
+The pip requirements mirror the Python package versions in `environment.yml`:
+
+```bash
+git clone https://github.com/baudisgroup/CNVSIM.git
+cd CNVSIM
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+On Windows, activate the environment with `.venv\Scripts\activate` instead.
 
 ## Project new CNV profiles
 

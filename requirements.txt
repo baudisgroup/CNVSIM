@@ -1,0 +1,14 @@
+numpy==2.2.5
+pandas==2.3.3
+pyarrow==21.0.0
+scipy==1.15.3
+scikit-learn==1.7.2
+joblib==1.5.2
+PyYAML==6.0.2
+hdbscan==0.8.41
+matplotlib==3.10.6
+seaborn==0.13.2
+Pillow==12.0.0
+igraph==1.0.0
+leidenalg==0.11.0
+umap-learn==0.5.9.post2
