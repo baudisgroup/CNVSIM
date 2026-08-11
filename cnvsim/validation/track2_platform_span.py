@@ -666,6 +666,7 @@ def _supplementary_table(
     result = identity
     level_columns = [
         "n_platforms_evaluable",
+        "n_evaluable_platforms_mixed",
         "any_evaluable_platform_mixed",
         "platform_span_association",
     ]
@@ -683,6 +684,7 @@ def _supplementary_table(
         ].rename(
             columns={
                 "n_platforms_evaluable": f"n_evaluable_{plural}",
+                "n_evaluable_platforms_mixed": f"n_mixed_{plural}",
                 "any_evaluable_platform_mixed": (
                     f"mixed_persists_within_{prefix}"
                 ),
@@ -697,6 +699,15 @@ def _supplementary_table(
             how="left",
             validate="one_to_one",
         )
+        evaluable_column = f"n_evaluable_{plural}"
+        mixed_column = f"n_mixed_{plural}"
+        percent_column = f"mixed_{plural}_percent"
+        result[percent_column] = np.where(
+            result[evaluable_column].ge(2),
+            100.0 * result[mixed_column] / result[evaluable_column],
+            np.nan,
+        )
+        result[percent_column] = result[percent_column].round(1)
 
     result = result.rename(
         columns={
@@ -732,9 +743,13 @@ def _supplementary_table(
         "cnv_level",
         "n_segment_carriers",
         "n_evaluable_platform_families",
+        "n_mixed_platform_families",
+        "mixed_platform_families_percent",
         "mixed_persists_within_platform_family",
         "platform_family_span_difference_supported",
         "n_evaluable_assay_platforms",
+        "n_mixed_assay_platforms",
+        "mixed_assay_platforms_percent",
         "mixed_persists_within_assay_platform",
         "assay_platform_span_difference_supported",
     ]
