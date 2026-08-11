@@ -30,6 +30,18 @@ PLATFORM_LABEL_COLUMN = "platform_label"
 PLATFORM_DETAIL_COLUMN = "platform_detail"
 SOURCE_COLUMN = "source_group_refined"
 
+PLATFORM_SHORT_LABELS = {
+    "NCIT:C158253": "Targeted NGS",
+    "pgx:gpl-MSK-IMPACT": "MSK-IMPACT",
+    "geo:GPL6801": "SNP 6.0",
+    "EFO:0010937": "CGH",
+    "OBI:0000626": "Unspecified DNA-seq",
+    "geo:GPL3718": "250K Nsp",
+    "geo:GPL3720": "250K Sty",
+    "geo:GPL2005": "50K Xba",
+    "geo:GPL2004": "50K Hind",
+}
+
 
 @dataclass(frozen=True)
 class Track2PlatformSpanParams:
@@ -172,6 +184,28 @@ def _format_platform_classes(
         f"{row[group_column]}={row['platform_span_class']}"
         for _, row in ordered.iterrows()
     )
+
+
+def _format_mixed_platforms(
+    frame: pd.DataFrame,
+    platform_level: str,
+) -> str:
+    if len(frame) < 2:
+        return "not_evaluable"
+    mixed = frame[frame["platform_span_class"].eq("mixed")].copy()
+    if mixed.empty:
+        return "none"
+    if platform_level == "platform_family":
+        values = mixed["platform_group"].astype(str)
+    else:
+        values = mixed["platform_id"].astype(str).map(
+            lambda platform_id: (
+                f"{PLATFORM_SHORT_LABELS[platform_id]} [{platform_id}]"
+                if platform_id in PLATFORM_SHORT_LABELS
+                else platform_id
+            )
+        )
+    return "; ".join(sorted(values.unique()))
 
 
 def _categorical_audit_status(platforms: pd.DataFrame) -> str:
@@ -535,6 +569,10 @@ def _event_summary(
                 "any_evaluable_platform_mixed": any_platform_mixed,
                 "all_evaluable_platforms_mixed": all_platforms_mixed,
                 "n_platform_tested_carriers": n_tested_carriers,
+                "mixed_evaluable_platforms": _format_mixed_platforms(
+                    eligible,
+                    platform_level,
+                ),
                 "platform_carrier_counts": _format_counts(
                     event_carriers, group_column
                 ),
@@ -582,6 +620,7 @@ def _event_summary(
         "any_evaluable_platform_mixed",
         "all_evaluable_platforms_mixed",
         "n_platform_tested_carriers",
+        "mixed_evaluable_platforms",
         "platform_carrier_counts",
         "evaluable_platform_span_classes",
         "categorical_audit_status",
@@ -667,6 +706,7 @@ def _supplementary_table(
     level_columns = [
         "n_platforms_evaluable",
         "n_evaluable_platforms_mixed",
+        "mixed_evaluable_platforms",
         "any_evaluable_platform_mixed",
         "platform_span_association",
     ]
@@ -685,6 +725,7 @@ def _supplementary_table(
             columns={
                 "n_platforms_evaluable": f"n_evaluable_{plural}",
                 "n_evaluable_platforms_mixed": f"n_mixed_{plural}",
+                "mixed_evaluable_platforms": f"mixed_{plural}",
                 "any_evaluable_platform_mixed": (
                     f"mixed_persists_within_{prefix}"
                 ),
@@ -745,11 +786,13 @@ def _supplementary_table(
         "n_evaluable_platform_families",
         "n_mixed_platform_families",
         "mixed_platform_families_percent",
+        "mixed_platform_families",
         "mixed_persists_within_platform_family",
         "platform_family_span_difference_supported",
         "n_evaluable_assay_platforms",
         "n_mixed_assay_platforms",
         "mixed_assay_platforms_percent",
+        "mixed_assay_platforms",
         "mixed_persists_within_assay_platform",
         "assay_platform_span_difference_supported",
     ]
