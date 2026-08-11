@@ -362,9 +362,6 @@ def _carrier_spans(
                 PLATFORM_LABEL_COLUMN,
                 PLATFORM_DETAIL_COLUMN,
                 SOURCE_COLUMN,
-                "start",
-                "end",
-                "chromosome_length_bp",
                 "segment_length_bp",
                 "segment_fraction_chromosome",
             ]
@@ -380,45 +377,6 @@ def _carrier_spans(
     if carriers.duplicated(EVENT_KEY + ["analysis_id"]).any():
         raise ValueError("Track 2 carrier rows must be unique per event and analysis")
     return carriers
-
-
-def _interval_union_metrics(frame: pd.DataFrame) -> dict[str, float]:
-    if frame.empty:
-        return {
-            "segment_union_start": np.nan,
-            "segment_union_end": np.nan,
-            "segment_union_length_bp": np.nan,
-            "segment_union_fraction_chromosome": np.nan,
-        }
-    starts = pd.to_numeric(frame["start"], errors="coerce")
-    ends = pd.to_numeric(frame["end"], errors="coerce")
-    valid = starts.notna() & ends.notna() & ends.gt(starts)
-    if not valid.any():
-        return {
-            "segment_union_start": np.nan,
-            "segment_union_end": np.nan,
-            "segment_union_length_bp": np.nan,
-            "segment_union_fraction_chromosome": np.nan,
-        }
-    union_length = float(_union_length(starts[valid], ends[valid]))
-    chromosome_lengths = pd.to_numeric(
-        frame.loc[valid, "chromosome_length_bp"], errors="coerce"
-    ).dropna()
-    chromosome_length = (
-        float(chromosome_lengths.iloc[0]) if not chromosome_lengths.empty else np.nan
-    )
-    if chromosome_lengths.nunique() > 1:
-        raise ValueError("Carrier segments for one event span multiple chromosomes")
-    return {
-        "segment_union_start": float(starts[valid].min()),
-        "segment_union_end": float(ends[valid].max()),
-        "segment_union_length_bp": union_length,
-        "segment_union_fraction_chromosome": (
-            union_length / chromosome_length
-            if np.isfinite(chromosome_length) and chromosome_length > 0
-            else np.nan
-        ),
-    }
 
 
 def _platform_details(
@@ -438,7 +396,6 @@ def _platform_details(
         span = pd.to_numeric(group["segment_fraction_chromosome"], errors="coerce")
         fractions = _span_fractions(span, params)
         source_counts = group[SOURCE_COLUMN].astype(str).value_counts()
-        union = _interval_union_metrics(group)
         detail_id = (
             str(group[PLATFORM_ID_COLUMN].iloc[0])
             if platform_level == "platform_label"
@@ -467,7 +424,6 @@ def _platform_details(
                 "focal_fraction_among_carriers": fractions["focal"],
                 "regional_fraction_among_carriers": fractions["regional"],
                 "broad_fraction_among_carriers": fractions["broad"],
-                **union,
                 "n_sources": int(len(source_counts)),
                 "dominant_source": str(source_counts.index[0]),
                 "dominant_source_fraction": float(source_counts.iloc[0] / len(group)),
@@ -534,8 +490,6 @@ def _event_summary(
         p_value = np.nan
         epsilon_squared = np.nan
         n_tested_carriers = 0
-        event_union = _interval_union_metrics(event_carriers)
-        tested = pd.DataFrame()
         if len(eligible) >= 2:
             eligible_names = set(eligible["platform_group"].astype(str))
             tested = event_carriers[
@@ -566,7 +520,6 @@ def _event_summary(
                             1.0,
                         )
                     )
-        cross_platform_union = _interval_union_metrics(tested)
         rows.append(
             {
                 **dict(zip(EVENT_KEY, key, strict=True)),
@@ -588,18 +541,6 @@ def _event_summary(
                 "evaluable_platform_span_classes": _format_platform_classes(
                     eligible, "platform_group"
                 ),
-                "all_carrier_union_length_bp": event_union[
-                    "segment_union_length_bp"
-                ],
-                "all_carrier_union_fraction_chromosome": event_union[
-                    "segment_union_fraction_chromosome"
-                ],
-                "cross_platform_union_length_bp": cross_platform_union[
-                    "segment_union_length_bp"
-                ],
-                "cross_platform_union_fraction_chromosome": cross_platform_union[
-                    "segment_union_fraction_chromosome"
-                ],
                 "categorical_audit_status": status,
                 "kruskal_h": h_statistic,
                 "platform_span_p_value": p_value,
@@ -643,10 +584,6 @@ def _event_summary(
         "n_platform_tested_carriers",
         "platform_carrier_counts",
         "evaluable_platform_span_classes",
-        "all_carrier_union_length_bp",
-        "all_carrier_union_fraction_chromosome",
-        "cross_platform_union_length_bp",
-        "cross_platform_union_fraction_chromosome",
         "categorical_audit_status",
         "platform_span_association",
         "platform_span_p_value",
@@ -675,7 +612,6 @@ def _scope_summary(events: pd.DataFrame) -> pd.DataFrame:
             for root, group in level_events.groupby("root", sort=True)
         )
     for platform_level, scope_type, scope_value, group in scopes:
-        status = group["categorical_audit_status"].value_counts()
         tested = group[group["platform_span_association"].notna()]
         associated = (
             tested["platform_span_association"]
@@ -689,20 +625,8 @@ def _scope_summary(events: pd.DataFrame) -> pd.DataFrame:
             .fillna(False)
             .astype(bool)
         )
-        all_mixed = (
-            tested["all_evaluable_platforms_mixed"]
-            .astype("boolean")
-            .fillna(False)
-            .astype(bool)
-        )
         epsilon = pd.to_numeric(
             tested["platform_span_epsilon_squared"], errors="coerce"
-        ).dropna()
-        union_fraction = pd.to_numeric(
-            tested["cross_platform_union_fraction_chromosome"], errors="coerce"
-        ).dropna()
-        union_length = pd.to_numeric(
-            tested["cross_platform_union_length_bp"], errors="coerce"
         ).dropna()
         rows.append(
             {
@@ -710,54 +634,17 @@ def _scope_summary(events: pd.DataFrame) -> pd.DataFrame:
                 "scope_type": scope_type,
                 "scope_value": scope_value,
                 "n_mixed_events": int(len(group)),
-                "n_platform_evaluable_events": int(len(tested)),
-                "n_insufficient_platform_coverage": int(
-                    status.get("insufficient_platform_coverage", 0)
-                ),
-                "n_mixed_persists_within_platform": int(
-                    status.get("mixed_persists_within_platform", 0)
-                ),
-                "n_platform_separated_span_classes": int(
-                    status.get("platform_separated_span_classes", 0)
-                ),
-                "n_consistent_span_class_across_platforms": int(
-                    status.get("consistent_span_class_across_platforms", 0)
-                ),
-                "n_within_platform_unresolved": int(
-                    status.get("within_platform_unresolved", 0)
-                ),
-                "n_platform_span_associated": int(associated.sum()),
-                "platform_span_associated_fraction": (
-                    float(associated.mean()) if len(associated) else np.nan
-                ),
-                "n_any_evaluable_platform_mixed": int(any_mixed.sum()),
-                "any_evaluable_platform_mixed_fraction": (
+                "n_evaluable_events": int(len(tested)),
+                "n_mixed_persists_within_platform": int(any_mixed.sum()),
+                "mixed_persistence_fraction": (
                     float(any_mixed.mean()) if len(any_mixed) else np.nan
                 ),
-                "n_all_evaluable_platforms_mixed": int(all_mixed.sum()),
-                "all_evaluable_platforms_mixed_fraction": (
-                    float(all_mixed.mean()) if len(all_mixed) else np.nan
+                "n_span_difference_supported": int(associated.sum()),
+                "span_difference_supported_fraction": (
+                    float(associated.mean()) if len(associated) else np.nan
                 ),
                 "median_platform_span_epsilon_squared": (
                     float(epsilon.median()) if not epsilon.empty else np.nan
-                ),
-                "cross_platform_union_fraction_q25": (
-                    float(union_fraction.quantile(0.25))
-                    if not union_fraction.empty
-                    else np.nan
-                ),
-                "cross_platform_union_fraction_median": (
-                    float(union_fraction.median())
-                    if not union_fraction.empty
-                    else np.nan
-                ),
-                "cross_platform_union_fraction_q75": (
-                    float(union_fraction.quantile(0.75))
-                    if not union_fraction.empty
-                    else np.nan
-                ),
-                "cross_platform_union_length_bp_median": (
-                    float(union_length.median()) if not union_length.empty else np.nan
                 ),
             }
         )
@@ -765,47 +652,22 @@ def _scope_summary(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def _supplementary_table(
-    carriers: pd.DataFrame,
     event_summary: pd.DataFrame,
-    params: Track2PlatformSpanParams,
 ) -> pd.DataFrame:
     """Create one manuscript-facing row per released mixed Track 2 event."""
 
-    span_rows: list[dict[str, object]] = []
-    for key, group in carriers.groupby(EVENT_KEY, sort=False):
-        span = pd.to_numeric(group["segment_fraction_chromosome"], errors="coerce")
-        fractions = _span_fractions(span, params)
-        span_rows.append(
-            {
-                **dict(zip(EVENT_KEY, key, strict=True)),
-                "n_segment_carriers": int(len(group)),
-                "median_segment_fraction_chromosome": float(span.median()),
-                "focal_carrier_fraction": fractions["focal"],
-                "regional_carrier_fraction": fractions["regional"],
-                "broad_carrier_fraction": fractions["broad"],
-            }
-        )
-    span_summary = pd.DataFrame(span_rows)
-
     identity = (
         event_summary[event_summary["platform_level"].eq("platform_family")][
-            EVENT_KEY + ["root", "reference_level"]
+            EVENT_KEY + ["root", "reference_level", "n_segment_carriers"]
         ]
         .drop_duplicates(EVENT_KEY)
         .copy()
     )
-    result = identity.merge(
-        span_summary,
-        on=EVENT_KEY,
-        how="left",
-        validate="one_to_one",
-    )
+    result = identity
     level_columns = [
         "n_platforms_evaluable",
         "any_evaluable_platform_mixed",
         "platform_span_association",
-        "platform_span_q_value",
-        "platform_span_epsilon_squared",
     ]
     for level, prefix in (
         ("platform_family", "platform_family"),
@@ -827,10 +689,6 @@ def _supplementary_table(
                 "platform_span_association": (
                     f"{prefix}_span_difference_supported"
                 ),
-                "platform_span_q_value": f"{prefix}_span_q_value",
-                "platform_span_epsilon_squared": (
-                    f"{prefix}_span_epsilon_squared"
-                ),
             }
         )
         result = result.merge(
@@ -851,6 +709,20 @@ def _supplementary_table(
     result["reference_layer"] = result["reference_layer"].replace(
         {"subtype": "core"}
     )
+    status_columns = [
+        "mixed_persists_within_platform_family",
+        "platform_family_span_difference_supported",
+        "mixed_persists_within_assay_platform",
+        "assay_platform_span_difference_supported",
+    ]
+    for column in status_columns:
+        result[column] = (
+            result[column]
+            .astype("boolean")
+            .map({True: "yes", False: "no"})
+            .astype("string")
+            .fillna("not_evaluable")
+        )
     order = [
         "reference_key",
         "root",
@@ -859,20 +731,12 @@ def _supplementary_table(
         "cnv_event",
         "cnv_level",
         "n_segment_carriers",
-        "median_segment_fraction_chromosome",
-        "focal_carrier_fraction",
-        "regional_carrier_fraction",
-        "broad_carrier_fraction",
         "n_evaluable_platform_families",
         "mixed_persists_within_platform_family",
         "platform_family_span_difference_supported",
-        "platform_family_span_q_value",
-        "platform_family_span_epsilon_squared",
         "n_evaluable_assay_platforms",
         "mixed_persists_within_assay_platform",
         "assay_platform_span_difference_supported",
-        "assay_platform_span_q_value",
-        "assay_platform_span_epsilon_squared",
     ]
     result = result[order]
     return result.sort_values(["root", "reference_key", "gene_symbol"])
@@ -987,26 +851,21 @@ def validate_track2_platform_span(
     details = pd.concat(detail_frames, ignore_index=True)
     event_summary = pd.concat(event_frames, ignore_index=True)
     scope_summary = _scope_summary(event_summary)
-    supplementary = _supplementary_table(carriers, event_summary, params)
+    supplementary = _supplementary_table(event_summary)
 
     outputs = {
-        "event_summary": out_dir / "mixed_event_platform_span.tsv",
-        "platform_details": out_dir / "mixed_event_platform_details.tsv",
         "summary": out_dir / "track2_platform_span_summary.tsv",
-        "supplementary_table": out_dir / "mixed_track2_platform_audit.tsv",
+        "supplementary_table": out_dir / "mixed_track2_platform_sensitivity.tsv",
         "manifest": out_dir / "manifest.json",
     }
-    event_summary.to_csv(outputs["event_summary"], sep="\t", index=False)
-    details.to_csv(outputs["platform_details"], sep="\t", index=False)
     scope_summary.to_csv(outputs["summary"], sep="\t", index=False)
     supplementary.to_csv(outputs["supplementary_table"], sep="\t", index=False)
     manifest = {
-        "schema_version": "cnvsim_track2_platform_span_v2",
+        "schema_version": "cnvsim_track2_platform_span_v3",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "analysis_scope": "released_mixed_track2_events",
         "interpretation": (
-            "Platform association and segment unions are descriptive. Union span "
-            "increases with carrier count and can be expanded by a single long segment."
+            "Platform association is descriptive and does not establish causation."
         ),
         "platform_levels": {
             "platform_family": PLATFORM_FAMILY_COLUMN,
@@ -1025,7 +884,6 @@ def validate_track2_platform_span(
                 event_summary["n_segment_carriers"].gt(0).sum()
             ),
             "segment_carrier_rows": int(len(carriers)),
-            "event_platform_rows": int(len(details)),
             "supplementary_event_rows": int(len(supplementary)),
             "categorical_audit_status": {
                 str(level): {
