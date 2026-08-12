@@ -939,7 +939,7 @@ def validate_track2_platform_span(
         "counts": {
             "mixed_track2_events": int(len(events)),
             "events_with_reconstructed_carriers": int(
-                event_summary["n_segment_carriers"].gt(0).sum()
+                supplementary["n_segment_carriers"].gt(0).sum()
             ),
             "segment_carrier_rows": int(len(carriers)),
             "supplementary_event_rows": int(len(supplementary)),
