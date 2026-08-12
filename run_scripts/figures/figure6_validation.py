@@ -118,46 +118,63 @@ def _save(fig: plt.Figure, path: Path) -> None:
     plt.close(fig)
 
 
-def _context_number(reference_key: str) -> int:
-    try:
-        return int(str(reference_key).rsplit("CTX", 1)[1])
-    except (IndexError, ValueError):
-        return 10**6
+def _reference_number(reference_key: str) -> int:
+    key = str(reference_key)
+    for marker in ("CTX", "COND"):
+        try:
+            return int(key.rsplit(marker, 1)[1])
+        except (IndexError, ValueError):
+            continue
+    return 10**6
 
 
-def _ordered_core_references(references: pd.DataFrame) -> pd.DataFrame:
-    core = references.loc[
-        references["reference_level"].astype(str).eq("subtype")
+def _ordered_references(references: pd.DataFrame) -> pd.DataFrame:
+    released = references.loc[
+        references["reference_level"].astype(str).isin(
+            ["subtype", "conditional"]
+        )
     ].copy()
-    core["root"] = core["root"].astype(str)
-    core["context_number"] = core["reference_key"].map(_context_number)
+    released["root"] = released["root"].astype(str)
+    released["reference_number"] = released["reference_key"].map(
+        _reference_number
+    )
+    released["level_order"] = released["reference_level"].map(
+        {"subtype": 0, "conditional": 1}
+    )
     root_order = list(ROOT_LABELS)
-    observed = core["root"].drop_duplicates().tolist()
+    observed = released["root"].drop_duplicates().tolist()
     root_order.extend(root for root in observed if root not in root_order)
-    core["root_order"] = pd.Categorical(
-        core["root"],
+    released["root_order"] = pd.Categorical(
+        released["root"],
         categories=root_order,
         ordered=True,
     )
-    return core.sort_values(
-        ["root_order", "context_number", "reference_key"]
+    return released.sort_values(
+        ["root_order", "level_order", "reference_number", "reference_key"]
     ).reset_index(drop=True)
 
 
-def _build_core_technical_composition(
+def _build_definition_technical_composition(
     assignments: pd.DataFrame,
     metadata: pd.DataFrame,
 ) -> pd.DataFrame:
-    anchors = assignments.loc[
-        assignments["pipeline_status"].astype(str).eq("anchor_member"),
-        ["analysis_id", "root", "assigned_reference_key"],
+    definitions = assignments.loc[
+        assignments["pipeline_status"].astype(str).isin(
+            ["anchor_member", "conditional_definition_member"]
+        ),
+        [
+            "analysis_id",
+            "root",
+            "pipeline_status",
+            "assigned_reference_key",
+        ],
     ].copy()
-    if anchors.empty:
-        raise ValueError("Release assignments contain no core definition samples")
-    if anchors["analysis_id"].duplicated().any():
-        raise ValueError("Core definition assignments contain duplicate analysis IDs")
-    if anchors["assigned_reference_key"].isna().any():
-        raise ValueError("A core definition sample is missing its reference subtype")
+    if definitions.empty:
+        raise ValueError("Release assignments contain no definition samples")
+    if definitions["analysis_id"].duplicated().any():
+        raise ValueError("Definition assignments contain duplicate analysis IDs")
+    if definitions["assigned_reference_key"].isna().any():
+        raise ValueError("A definition sample is missing its reference subtype")
 
     metadata_columns = [
         "analysis_id",
@@ -167,7 +184,7 @@ def _build_core_technical_composition(
     ]
     if metadata["analysis_id"].duplicated().any():
         raise ValueError("Analysis metadata contain duplicate analysis IDs")
-    composition = anchors.merge(
+    composition = definitions.merge(
         metadata[metadata_columns],
         on="analysis_id",
         how="left",
@@ -178,7 +195,7 @@ def _build_core_technical_composition(
     if missing_metadata.any():
         example = composition.loc[missing_metadata, "analysis_id"].iloc[0]
         raise ValueError(
-            "Core definition samples are missing analysis metadata; "
+            "Definition samples are missing analysis metadata; "
             f"first missing analysis: {example}"
         )
     composition = composition.drop(columns="_merge").rename(
@@ -192,11 +209,18 @@ def draw_technical_composition(
     composition: pd.DataFrame,
     out_path: Path,
 ) -> None:
-    core = _ordered_core_references(references)
-    keys = core["reference_key"].astype(str).tolist()
+    released = _ordered_references(references)
+    keys = released["reference_key"].astype(str).tolist()
     composition = composition.loc[
         composition["full_reference_key"].astype(str).isin(keys)
     ].copy()
+    observed_keys = set(composition["full_reference_key"].astype(str))
+    missing_keys = sorted(set(keys) - observed_keys)
+    if missing_keys:
+        raise ValueError(
+            "Released subtypes are missing definition samples; "
+            f"first missing subtype: {missing_keys[0]}"
+        )
     platform_counts = composition["platform_id"].astype(str).value_counts()
     major_platforms = platform_counts.head(9).index.tolist()
     composition["platform_plot"] = composition["platform_id"].astype(str).where(
@@ -331,9 +355,9 @@ def draw_technical_composition(
             spine.set_color("#91A0A6")
             spine.set_linewidth(0.8)
 
-    roots = core["root"].astype(str).to_numpy()
+    roots = released["root"].astype(str).to_numpy()
     starts = np.r_[0, np.flatnonzero(roots[1:] != roots[:-1]) + 1]
-    ends = np.r_[starts[1:], len(core)]
+    ends = np.r_[starts[1:], len(released)]
     platform_axis.set_yticks(
         [(start + end - 1) / 2 for start, end in zip(starts, ends)]
     )
@@ -642,7 +666,7 @@ def main() -> None:
         },
         "analysis metadata",
     )
-    composition = _build_core_technical_composition(assignments, metadata)
+    composition = _build_definition_technical_composition(assignments, metadata)
     root_recovery = _read_tsv(
         recovery_dir / "root_signature_recovery.tsv",
         {
@@ -672,7 +696,7 @@ def main() -> None:
     )
     print("[CNVSIM] Figure 6 validation panels complete")
     print(
-        "  core definition composition: "
+        "  released definition composition: "
         f"{len(composition):,} analyses across "
         f"{composition['full_reference_key'].nunique()} subtypes"
     )
