@@ -84,6 +84,7 @@ table. Multiple samples may be submitted together.
 
 - genome build: GRCh38/hg38;
 - coordinates: 0-based, half-open intervals;
+- interval length: `end` must be greater than `start`;
 - chromosomes: autosomes 1-22;
 - one cancer-root identifier or ICD-O topography code per sample;
 - CNV segments labelled as gain, loss, high-level gain, or high-level loss.
@@ -228,6 +229,9 @@ For an exact biosample query, the first request instead uses
 1-22. If a biosample has multiple analyses, it uses
 `caseLevelData.analysisId` to assign each CNV to the selected analysis and
 prevents profiles from different analyses from being mixed.
+Progenetix records with non-positive interval length (`end <= start`) are
+excluded and reported per analysis in `retrieval_audit.tsv`; the converter
+stops only when no projectable CNV segment remains for a selected analysis.
 
 ### Projection smoke test
 

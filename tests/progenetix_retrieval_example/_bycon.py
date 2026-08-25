@@ -251,12 +251,22 @@ def prepare_projection_inputs(
         variants = biosample_variants(str(resource), str(biosample_id))
         selected_ids = set(group["analysis_id"].astype(str))
         counts = {analysis_id: 0 for analysis_id in selected_ids}
+        invalid_coordinate_counts = {
+            analysis_id: 0 for analysis_id in selected_ids
+        }
         for variant in variants:
             variation = variant.get("variation", {}) or {}
             if variation.get("type") != "CopyNumberChange":
                 continue
             state = cnv_state(variation)
             if state is None:
+                continue
+            analysis_ids = {
+                str(case.get("analysisId", "")).strip()
+                for case in variant.get("caseLevelData", []) or []
+            }
+            matched_analysis_ids = sorted(selected_ids & analysis_ids)
+            if not matched_analysis_ids:
                 continue
             location = variation.get("location", {}) or {}
             chromosome = str(location.get("chromosome", "")).removeprefix("chr")
@@ -271,12 +281,10 @@ def prepare_projection_inputs(
             start = int(location["start"])
             end = int(location["end"])
             if start < 0 or end <= start:
-                raise ValueError(f"Invalid CNV coordinates: {start}-{end}")
-            analysis_ids = {
-                str(case.get("analysisId", "")).strip()
-                for case in variant.get("caseLevelData", []) or []
-            }
-            for analysis_id in sorted(selected_ids & analysis_ids):
+                for analysis_id in matched_analysis_ids:
+                    invalid_coordinate_counts[analysis_id] += 1
+                continue
+            for analysis_id in matched_analysis_ids:
                 segment_rows.append(
                     {
                         "sample_id": analysis_id,
@@ -306,6 +314,9 @@ def prepare_projection_inputs(
                     "biosample_id": biosample_id,
                     "analysis_id": analysis_id,
                     "n_autosomal_cnv_segments": counts[analysis_id],
+                    "n_invalid_coordinate_segments_skipped": (
+                        invalid_coordinate_counts[analysis_id]
+                    ),
                     "cnvsim_overlap_status": row.get(
                         "cnvsim_overlap_status", "not_checked"
                     ),
@@ -319,7 +330,20 @@ def prepare_projection_inputs(
         if int(row["n_autosomal_cnv_segments"]) == 0
     ]
     if missing:
-        raise ValueError(f"Selected analyses have no projectable CNVs: {missing}")
+        details = [
+            {
+                "analysis_id": row["analysis_id"],
+                "invalid_coordinate_segments_skipped": int(
+                    row["n_invalid_coordinate_segments_skipped"]
+                ),
+            }
+            for row in audit_rows
+            if row["analysis_id"] in set(missing)
+        ]
+        raise ValueError(
+            "Selected analyses have no projectable CNVs after filtering "
+            f"non-positive intervals: {details}"
+        )
 
     samples = pd.DataFrame(sample_rows).drop_duplicates("sample_id")
     segments = pd.DataFrame(segment_rows).drop_duplicates(
@@ -345,6 +369,9 @@ def prepare_projection_inputs(
         "counts": {
             "selected_analyses": int(len(samples)),
             "autosomal_cnv_segments": int(len(segments)),
+            "invalid_coordinate_segment_links_skipped": int(
+                audit["n_invalid_coordinate_segments_skipped"].sum()
+            ),
         },
         "files": {name: path.name for name, path in outputs.items() if name != "manifest"},
     }

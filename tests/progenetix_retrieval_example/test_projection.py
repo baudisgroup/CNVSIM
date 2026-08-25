@@ -2,12 +2,14 @@ from __future__ import annotations
 
 """Live bycon-to-CNVSIM projection smoke test."""
 
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 import warnings
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -61,6 +63,75 @@ CASES = [
         "assigned_reference_key": None,
     },
 ]
+
+
+class ProjectionInputSanitizationTest(unittest.TestCase):
+    @patch("_bycon.biosample_variants")
+    def test_zero_length_segments_are_skipped_and_audited(
+        self, variants_mock
+    ) -> None:
+        analysis_id = "pgxcs-test"
+        base = {
+            "type": "CopyNumberChange",
+            "copyChange": "low-level gain",
+        }
+        variants_mock.return_value = [
+            {
+                "variation": {
+                    **base,
+                    "location": {
+                        "chromosome": "1",
+                        "sequence_id": "refseq:NC_000001.11",
+                        "start": 100,
+                        "end": 100,
+                    },
+                },
+                "caseLevelData": [{"analysisId": analysis_id}],
+            },
+            {
+                "variation": {
+                    **base,
+                    "location": {
+                        "chromosome": "1",
+                        "sequence_id": "refseq:NC_000001.11",
+                        "start": 200,
+                        "end": 300,
+                    },
+                },
+                "caseLevelData": [{"analysisId": analysis_id}],
+            },
+        ]
+        selection = pd.DataFrame(
+            [
+                {
+                    "selected": "yes",
+                    "resource": "tumour",
+                    "biosample_id": "pgxbs-test",
+                    "analysis_id": analysis_id,
+                    "icdo_topography_id": "C18.9",
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory(prefix="cnvsim-input-") as tmp:
+            outputs = prepare_projection_inputs(
+                selection=selection,
+                out_dir=Path(tmp) / "inputs",
+                overwrite=True,
+            )
+            segments = pd.read_csv(outputs["segments"], sep="\t")
+            audit = pd.read_csv(outputs["audit"], sep="\t")
+            manifest = json.loads(outputs["manifest"].read_text())
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(int(segments.iloc[0]["start"]), 200)
+        self.assertEqual(int(segments.iloc[0]["end"]), 300)
+        self.assertEqual(
+            int(audit.iloc[0]["n_invalid_coordinate_segments_skipped"]), 1
+        )
+        self.assertEqual(
+            manifest["counts"]["invalid_coordinate_segment_links_skipped"],
+            1,
+        )
 
 
 @unittest.skipUnless(

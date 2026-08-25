@@ -40,9 +40,13 @@ def main() -> None:
     )
     samples = pd.read_csv(outputs["samples"], sep="\t")
     segments = pd.read_csv(outputs["segments"], sep="\t")
+    audit = pd.read_csv(outputs["audit"], sep="\t")
     print("[CNVSIM] projection inputs prepared")
     print(f"  analyses: {len(samples):,}")
     print(f"  autosomal CNV segments: {len(segments):,}")
+    skipped = int(audit["n_invalid_coordinate_segments_skipped"].sum())
+    if skipped:
+        print(f"  non-positive CNV intervals skipped: {skipped:,}")
     for name, path in outputs.items():
         print(f"  {name}: {path}")
 
