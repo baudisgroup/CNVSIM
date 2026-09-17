@@ -103,7 +103,7 @@ def query_candidates(
             )
     else:
         if not filters:
-            raise ValueError("Provide at least one --filter or --biosample-id")
+            raise ValueError("Provide at least one -filters or -biosample-id")
         # Start from currently retrievable biosamples. The global analyses endpoint
         # can include historical records whose linked biosamples no longer exist.
         scan_limit = min(max(limit * 2, limit), 100)
@@ -164,7 +164,16 @@ def query_candidates(
     return candidates
 
 
-def main() -> None:
+def parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise argparse.ArgumentTypeError("Expected 'true' or 'false'.")
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "List projectable CNV analyses from Progenetix tumour data or the "
@@ -172,16 +181,38 @@ def main() -> None:
             "running prepare_projection_inputs.py."
         )
     )
-    parser.add_argument("--resource", choices=["tumour", "cell-line"], required=True)
-    parser.add_argument("--filter", action="append", default=[])
-    parser.add_argument("--biosample-id", action="append", default=[])
-    parser.add_argument("--include-descendants", action="store_true")
-    parser.add_argument("--filter-logic", choices=["AND", "OR"], default="AND")
-    parser.add_argument("--limit", type=int, default=50)
-    parser.add_argument("--skip", type=int, default=0)
-    parser.add_argument("--release-dir")
-    parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "-resource", "--resource", choices=["tumour", "cell-line"], required=True
+    )
+    parser.add_argument(
+        "-filters", "--filter", dest="filter", action="append", default=[],
+        help="Filter ID; repeat this option to provide multiple filters.",
+    )
+    parser.add_argument("-biosample-id", "--biosample-id", action="append", default=[])
+    parser.add_argument(
+        "-includeDescendantTerms", dest="include_descendants", type=parse_bool,
+        default=True, metavar="{true,false}",
+        help="Include descendant terms for all filters (default: true).",
+    )
+    parser.add_argument(
+        "--include-descendants", "--includeDescendantTerms",
+        dest="include_descendants", action="store_true",
+        default=argparse.SUPPRESS, help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "-filterLogic", "--filter-logic", "-filter-logic", dest="filter_logic",
+        choices=["AND", "OR"], default="AND",
+    )
+    parser.add_argument("-limit", "--limit", type=int, default=50)
+    parser.add_argument("-skip", "--skip", type=int, default=0)
+    parser.add_argument("-release-dir", "--release-dir")
+    parser.add_argument("-out", "--out", required=True)
     parser.add_argument("--overwrite", action="store_true")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     if args.limit < 1:
         parser.error("--limit must be positive")
