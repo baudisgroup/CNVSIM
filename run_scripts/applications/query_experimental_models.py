@@ -165,7 +165,7 @@ def _print_analysis_summary(frame: pd.DataFrame) -> None:
         print(f"  reason: {row.status_reason}")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Query ranked cell-line models for a CNVSIM reference, or look up "
@@ -173,20 +173,23 @@ def main() -> None:
         )
     )
     parser.add_argument(
+        "-cell-line-dir",
         "--cell-line-dir",
+        "-application-dir",
         "--application-dir",
         dest="application_dir",
         required=True,
         help="Public CNVSIM cell_line resource directory.",
     )
     query = parser.add_mutually_exclusive_group(required=True)
-    query.add_argument("--reference-key")
-    query.add_argument("--model-id")
+    query.add_argument("-reference-key", "--reference-key")
+    query.add_argument("-model-id", "--model-id")
     parser.add_argument(
+        "-root",
         "--root",
         help="Restrict a multi-root model query to one CNVSIM root.",
     )
-    parser.add_argument("--top-n", type=int, default=5)
+    parser.add_argument("-top-n", "--top-n", type=int, default=5)
     parser.add_argument(
         "--include-nonrecommended",
         action="store_true",
@@ -197,19 +200,25 @@ def main() -> None:
         action="store_true",
         help="Show the analysis-level audit rows for a model query.",
     )
-    parser.add_argument("--out", help="Optional TSV output for the main result.")
+    parser.add_argument("-out", "--out", help="Optional TSV output for the main result.")
     parser.add_argument(
+        "-analysis-out",
         "--analysis-out",
         help="Optional TSV output for model analysis-level details.",
     )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.reference_key:
         if args.root:
-            parser.error("--root is only valid with --model-id")
+            parser.error("-root is only valid with -model-id")
         if args.analysis_out or args.include_analysis_details:
             parser.error(
-                "analysis detail options are only valid with --model-id"
+                "analysis detail options are only valid with -model-id"
             )
         result = query_models_for_context(
             args.application_dir,

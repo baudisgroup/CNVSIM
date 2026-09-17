@@ -14,18 +14,23 @@ if str(REPO_ROOT) not in sys.path:
 from cnvsim.projection import project_samples
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Project samples.tsv and 0-based half-open GRCh38 segments.tsv "
             "into the frozen CNVSIM reference."
         )
     )
-    parser.add_argument("--bundle-dir", required=True)
-    parser.add_argument("--samples", required=True)
-    parser.add_argument("--segments", required=True)
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("-bundle-dir", "--bundle-dir", required=True)
+    parser.add_argument("-samples", "--samples", required=True)
+    parser.add_argument("-segments", "--segments", required=True)
+    parser.add_argument("-out-dir", "--out-dir", required=True)
     parser.add_argument("--overwrite", action="store_true")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     outputs = project_samples(

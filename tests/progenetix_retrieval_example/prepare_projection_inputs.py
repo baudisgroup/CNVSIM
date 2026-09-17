@@ -16,7 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from _bycon import prepare_projection_inputs
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Read a candidate table with selected=yes rows and create samples.tsv "
@@ -24,9 +24,14 @@ def main() -> None:
             "are retained for audit and never prevent projection."
         )
     )
-    parser.add_argument("--selection", required=True)
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("-selection", "--selection", required=True)
+    parser.add_argument("-out-dir", "--out-dir", required=True)
     parser.add_argument("--overwrite", action="store_true")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     selection_path = Path(args.selection).expanduser().resolve()
