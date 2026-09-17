@@ -121,10 +121,10 @@ Q002	8	12700000	14500000	high_gain
 
 ```bash
 python -m run_scripts.project_samples \
-  --bundle-dir "$CNVSIM_DATA/projection_bundle" \
-  --samples /path/to/samples.tsv \
-  --segments /path/to/segments.tsv \
-  --out-dir /path/to/projection_results \
+  -bundle-dir "$CNVSIM_DATA/projection_bundle" \
+  -samples /path/to/samples.tsv \
+  -segments /path/to/segments.tsv \
+  -out-dir /path/to/projection_results \
   --overwrite
 ```
 
@@ -170,14 +170,20 @@ includes descendant ICD-O terms:
 export EXAMPLE_OUT=/path/to/progenetix_example
 
 python tests/progenetix_retrieval_example/query_candidates.py \
-  --resource tumour \
-  --filter pgx:icdot-C16 \
-  --include-descendants \
-  --limit 20 \
-  --release-dir "$CNVSIM_DATA" \
-  --out "$EXAMPLE_OUT/candidates.tsv" \
+  -resource tumour \
+  -filters pgx:icdot-C16 \
+  -includeDescendantTerms true \
+  -limit 20 \
+  -release-dir "$CNVSIM_DATA" \
+  -out "$EXAMPLE_OUT/candidates.tsv" \
   --overwrite
 ```
+Repeat `-filters` to provide multiple filter IDs, and use `-filterLogic AND`
+or `-filterLogic OR` to combine them (default: `AND`). Descendant expansion
+defaults to `true`; use `-includeDescendantTerms false` to disable it.
+This setting applies to all filters in the GET request. Double-dash
+options remain accepted as aliases, including the `--include-descendants`
+flag, but omitting that flag no longer disables descendant expansion.
 
 Review `candidates.tsv` and enter `yes` in the `selected` column for one or
 more analyses. The overlap columns report whether an analysis is already part
@@ -186,31 +192,31 @@ Convert the selected rows and run the standard projection interface:
 
 ```bash
 python tests/progenetix_retrieval_example/prepare_projection_inputs.py \
-  --selection "$EXAMPLE_OUT/candidates.tsv" \
-  --out-dir "$EXAMPLE_OUT/input" \
+  -selection "$EXAMPLE_OUT/candidates.tsv" \
+  -out-dir "$EXAMPLE_OUT/input" \
   --overwrite
 
 python -m run_scripts.project_samples \
-  --bundle-dir "$CNVSIM_DATA/projection_bundle" \
-  --samples "$EXAMPLE_OUT/input/samples.tsv" \
-  --segments "$EXAMPLE_OUT/input/segments.tsv" \
-  --out-dir "$EXAMPLE_OUT/projection" \
+  -bundle-dir "$CNVSIM_DATA/projection_bundle" \
+  -samples "$EXAMPLE_OUT/input/samples.tsv" \
+  -segments "$EXAMPLE_OUT/input/segments.tsv" \
+  -out-dir "$EXAMPLE_OUT/projection" \
   --overwrite
 ```
 
-Use `--resource cell-line` to query the cancercelllines dataset, or one or more
-`--biosample-id` arguments to retrieve specified biosamples directly.
+Use `-resource cell-line` to query the cancercelllines dataset, or one or more
+`-biosample-id` arguments to retrieve specified biosamples directly.
 
 For example, the following command retrieves CNV analyses for two specified
 Progenetix tumour biosamples without running a topography filter:
 
 ```bash
 python tests/progenetix_retrieval_example/query_candidates.py \
-  --resource tumour \
-  --biosample-id pgxbs-kftviyx8 \
-  --biosample-id pgxbs-kftvk2uk \
-  --release-dir "$CNVSIM_DATA" \
-  --out "$EXAMPLE_OUT/selected_biosamples.tsv" \
+  -resource tumour \
+  -biosample-id pgxbs-kftviyx8 \
+  -biosample-id pgxbs-kftvk2uk \
+  -release-dir "$CNVSIM_DATA" \
+  -out "$EXAMPLE_OUT/selected_biosamples.tsv" \
   --overwrite
 ```
 
@@ -258,21 +264,21 @@ one cancer-root group.
 
 ```bash
 python run_scripts/applications/query_experimental_models.py \
-  --cell-line-dir "$CNVSIM_DATA/cell_line" \
-  --reference-key C16-COND4 \
-  --top-n 5
+  -cell-line-dir "$CNVSIM_DATA/cell_line" \
+  -reference-key C16-COND4 \
+  -top-n 5
 ```
 
 ### Look up the tumour-derived reference subtype for a cell line
 
 ```bash
 python run_scripts/applications/query_experimental_models.py \
-  --cell-line-dir "$CNVSIM_DATA/cell_line" \
-  --model-id CVCL_7042 \
+  -cell-line-dir "$CNVSIM_DATA/cell_line" \
+  -model-id CVCL_7042 \
   --include-analysis-details
 ```
 
-Use `--out` to save the full main result as TSV and `--analysis-out` to save
+Use `-out` to save the full main result as TSV and `-analysis-out` to save
 analysis-level details for a cell-line lookup. Recommended models are ranked by
 replicate evidence, assignment consistency and coverage, and calibrated
 distance to the matched subtype.
