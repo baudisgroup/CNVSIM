@@ -21,10 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
             "into the frozen CNVSIM reference."
         )
     )
-    parser.add_argument("-bundle-dir", "--bundle-dir", required=True)
-    parser.add_argument("-samples", "--samples", required=True)
-    parser.add_argument("-segments", "--segments", required=True)
-    parser.add_argument("-out-dir", "--out-dir", required=True)
+    parser.add_argument("--bundle-dir", "-bundle-dir", required=True)
+    parser.add_argument("--samples", "-samples", required=True)
+    parser.add_argument("--segments", "-segments", required=True)
+    parser.add_argument("--out-dir", "-out-dir", required=True)
     parser.add_argument("--overwrite", action="store_true")
     return parser
 

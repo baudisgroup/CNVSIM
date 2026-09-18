@@ -28,11 +28,7 @@ class UserCliTest(unittest.TestCase):
                     continue
                 with self.subTest(module=module.__name__, dest=action.dest):
                     preferred = action.option_strings[0]
-                    if action.nargs == 0:
-                        self.assertTrue(preferred.startswith("--"))
-                    else:
-                        self.assertTrue(preferred.startswith("-"))
-                        self.assertFalse(preferred.startswith("--"))
+                    self.assertTrue(preferred.startswith("--"))
 
     def test_projection_aliases_preserve_argument_names(self) -> None:
         parsed = []
@@ -115,18 +111,18 @@ class UserCliTest(unittest.TestCase):
     def test_model_query_modes_remain_required_and_mutually_exclusive(self) -> None:
         for query in [
             [],
-            ["-reference-key", "C16-COND4", "--model-id", "CVCL_7042"],
+            ["--reference-key", "C16-COND4", "--model-id", "CVCL_7042"],
         ]:
             with self.subTest(query=query), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     model_cli.build_parser().parse_args(
-                        ["-cell-line-dir", "cell_line", *query]
+                        ["--cell-line-dir", "cell_line", *query]
                     )
 
     def test_boolean_flags_do_not_consume_values(self) -> None:
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             prepare_cli.build_parser().parse_args(
-                ["-selection", "candidates.tsv", "-out-dir", "inputs", "--overwrite", "true"]
+                ["--selection", "candidates.tsv", "--out-dir", "inputs", "--overwrite", "true"]
             )
 
     def test_projection_main_forwards_paths_and_flag(self) -> None:
@@ -176,8 +172,8 @@ class UserCliTest(unittest.TestCase):
                     sys, "argv",
                     [
                         "prepare_projection_inputs.py",
-                        "-selection", str(selection_path),
-                        "-out-dir", str(directory / "inputs"),
+                        "--selection", str(selection_path),
+                        "--out-dir", str(directory / "inputs"),
                         "--overwrite",
                     ],
                 ),
@@ -198,9 +194,9 @@ class UserCliTest(unittest.TestCase):
                 sys, "argv",
                 [
                     "query_experimental_models.py",
-                    "-cell-line-dir", "cell_line",
-                    "-reference-key", "C16-COND4",
-                    "-top-n", "3",
+                    "--cell-line-dir", "cell_line",
+                    "--reference-key", "C16-COND4",
+                    "--top-n", "3",
                     "--include-nonrecommended",
                 ],
             ),
@@ -220,9 +216,9 @@ class UserCliTest(unittest.TestCase):
                 sys, "argv",
                 [
                     "query_experimental_models.py",
-                    "-cell-line-dir", "cell_line",
-                    "-model-id", "CVCL_7042",
-                    "-root", "C16",
+                    "--cell-line-dir", "cell_line",
+                    "--model-id", "CVCL_7042",
+                    "--root", "C16",
                     "--include-analysis-details",
                 ],
             ),
@@ -237,15 +233,15 @@ class UserCliTest(unittest.TestCase):
         self.assertIn("Analysis-level audit", output.getvalue())
 
     def test_invalid_subtype_only_options_fail_before_query(self) -> None:
-        for option in [["-root", "C16"], ["-analysis-out", "analyses.tsv"]]:
+        for option in [["--root", "C16"], ["--analysis-out", "analyses.tsv"]]:
             with (
                 self.subTest(option=option),
                 patch.object(
                     sys, "argv",
                     [
                         "query_experimental_models.py",
-                        "-cell-line-dir", "cell_line",
-                        "-reference-key", "C16-COND4",
+                        "--cell-line-dir", "cell_line",
+                        "--reference-key", "C16-COND4",
                         *option,
                     ],
                 ),

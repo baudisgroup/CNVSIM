@@ -24,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
             "are retained for audit and never prevent projection."
         )
     )
-    parser.add_argument("-selection", "--selection", required=True)
-    parser.add_argument("-out-dir", "--out-dir", required=True)
+    parser.add_argument("--selection", "-selection", required=True)
+    parser.add_argument("--out-dir", "-out-dir", required=True)
     parser.add_argument("--overwrite", action="store_true")
     return parser
 

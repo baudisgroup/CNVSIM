@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Offline tests for the bycon-style retrieval CLI and API parameter mapping."""
+"""Offline tests for the retrieval CLI and Beacon API parameter mapping."""
 
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -25,20 +25,20 @@ import query_candidates as candidate_cli
 class QueryCandidatesCliTest(unittest.TestCase):
     def setUp(self) -> None:
         self.parser = candidate_cli.build_parser()
-        self.required = ["-resource", "tumour", "-out", "candidates.tsv"]
+        self.required = ["--resource", "tumour", "--out", "candidates.tsv"]
 
-    def test_bycon_style_options_preserve_internal_names(self) -> None:
+    def test_long_options_preserve_internal_names(self) -> None:
         args = self.parser.parse_args(
             self.required
             + [
-                "-filters", "pgx:icdot-C16",
-                "-filters", "NCIT:C7541",
-                "-biosample-id", "pgxbs-test",
-                "-filterLogic", "OR",
-                "-includeDescendantTerms", "false",
-                "-limit", "20",
-                "-skip", "5",
-                "-release-dir", "/tmp/release",
+                "--filters", "pgx:icdot-C16",
+                "--filters", "NCIT:C7541",
+                "--biosample-id", "pgxbs-test",
+                "--filterLogic", "OR",
+                "--includeDescendantTerms", "false",
+                "--limit", "20",
+                "--skip", "5",
+                "--release-dir", "/tmp/release",
                 "--overwrite",
             ]
         )
@@ -59,7 +59,7 @@ class QueryCandidatesCliTest(unittest.TestCase):
         for value, expected in [("true", True), ("false", False), ("FALSE", False)]:
             with self.subTest(value=value):
                 args = self.parser.parse_args(
-                    self.required + ["-includeDescendantTerms", value]
+                    self.required + ["--includeDescendantTerms", value]
                 )
                 self.assertIs(args.include_descendants, expected)
 
@@ -68,23 +68,57 @@ class QueryCandidatesCliTest(unittest.TestCase):
             with self.subTest(value=value), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     self.parser.parse_args(
-                        self.required + ["-includeDescendantTerms", value]
+                        self.required + ["--includeDescendantTerms", value]
                     )
                 self.assertEqual(error.exception.code, 2)
 
-    def test_descendant_value_is_required_for_preferred_option(self) -> None:
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            self.parser.parse_args(self.required + ["-includeDescendantTerms"])
+    def test_descendant_value_is_required(self) -> None:
+        for option in ["--includeDescendantTerms", "-includeDescendantTerms"]:
+            with self.subTest(option=option), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.parser.parse_args(self.required + [option])
+
+    def test_single_dash_aliases_preserve_argument_values(self) -> None:
+        parsed = []
+        for prefix in ["--", "-"]:
+            parsed.append(vars(self.parser.parse_args([
+                prefix + "resource", "cell-line",
+                prefix + "filters", "NCIT:C7541",
+                prefix + "filters", "pgx:icdot-C16",
+                prefix + "biosample-id", "pgxbs-test",
+                prefix + "includeDescendantTerms", "false",
+                prefix + "filterLogic", "OR",
+                prefix + "limit", "20",
+                prefix + "skip", "5",
+                prefix + "release-dir", "/tmp/release",
+                prefix + "out", "candidates.tsv",
+                "--overwrite",
+            ])))
+        self.assertEqual(parsed[0], parsed[1])
+        self.assertIs(parsed[0]["include_descendants"], False)
+
+    def test_long_options_accept_equals_syntax(self) -> None:
+        args = self.parser.parse_args(self.required + [
+            "--filters=pgx:icdot-C16",
+            "--filters=NCIT:C7541",
+            "--includeDescendantTerms=false",
+            "--filterLogic=OR",
+            "--limit=20",
+        ])
+        self.assertEqual(args.filter, ["pgx:icdot-C16", "NCIT:C7541"])
+        self.assertIs(args.include_descendants, False)
+        self.assertEqual(args.filter_logic, "OR")
+        self.assertEqual(args.limit, 20)
 
     def test_legacy_option_aliases_remain_accepted(self) -> None:
-        for flag in ["--include-descendants", "--includeDescendantTerms"]:
-            with self.subTest(flag=flag):
+        for flags in [[], ["--include-descendants"]]:
+            with self.subTest(flags=flags):
                 args = self.parser.parse_args(
                     [
                         "--resource", "cell-line",
                         "--filter", "NCIT:C7541",
                         "--biosample-id", "pgxbs-test",
-                        flag,
+                        *flags,
                         "--filter-logic", "OR",
                         "--limit", "10",
                         "--skip", "2",
@@ -114,18 +148,18 @@ class QueryCandidatesCliTest(unittest.TestCase):
         )
         cases = [
             ([], True),
-            (["-includeDescendantTerms", "true"], True),
-            (["-includeDescendantTerms", "false"], False),
+            (["--includeDescendantTerms", "true"], True),
+            (["--includeDescendantTerms", "false"], False),
         ]
         for options, expected in cases:
             with self.subTest(options=options), tempfile.TemporaryDirectory() as tmp:
                 output = Path(tmp) / "candidates.tsv"
                 argv = [
                     "query_candidates.py",
-                    "-resource", "tumour",
-                    "-filters", "pgx:icdot-C16",
-                    "-filterLogic", "OR",
-                    "-out", str(output),
+                    "--resource", "tumour",
+                    "--filters", "pgx:icdot-C16",
+                    "--filterLogic", "OR",
+                    "--out", str(output),
                     *options,
                 ]
                 with (
@@ -146,7 +180,7 @@ class QueryCandidatesCliTest(unittest.TestCase):
 
     def test_nonpositive_limit_fails_before_query(self) -> None:
         with (
-            patch.object(sys, "argv", ["query_candidates.py", *self.required, "-limit", "0"]),
+            patch.object(sys, "argv", ["query_candidates.py", *self.required, "--limit", "0"]),
             patch.object(candidate_cli, "query_candidates") as query_mock,
             redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit),
@@ -160,10 +194,10 @@ class QueryCandidatesCliTest(unittest.TestCase):
                 args = self.parser.parse_args(
                     self.required
                     + [
-                        "-filters", "pgx:icdot-C16",
-                        "-filters", "NCIT:C7541",
-                        "-includeDescendantTerms", value,
-                        "-filterLogic", "OR",
+                        "--filters", "pgx:icdot-C16",
+                        "--filters", "NCIT:C7541",
+                        "--includeDescendantTerms", value,
+                        "--filterLogic", "OR",
                     ]
                 )
                 with patch.object(bycon_client, "request_json", return_value={}) as request:
