@@ -76,8 +76,8 @@ PLATFORM_COLORS = {
 }
 PLATFORM_LABELS = {
     "Arrays_HighRes": "High-resolution arrays",
-    "Arrays_LowRes": "Lower-resolution array/CGH",
-    "NGS_Based": "NGS-based",
+    "Arrays_LowRes": "Low-resolution arrays/CGH",
+    "NGS_Based": "NGS-based assays",
     "Other": "Other/unknown",
 }
 TEXT = "#111111"
@@ -234,7 +234,7 @@ def _plot_platform_composition(
 
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=10.5 if top_n is not None else 9.0)
-    ax.set_xlabel("Number of tumour analyses")
+    ax.set_xlabel("Number of cancer analyses")
     ax.grid(axis="x", color="#E3E3E3", linewidth=0.9)
     ax.set_axisbelow(True)
     ax.set_xlim(0, float(left.max()) * 1.13)
@@ -490,8 +490,8 @@ def _plot_panel_b(
             color=TEXT,
             va="top",
         )
-    ax_right.set_xlabel("Pearson correlation of gene-level CNV frequencies\nacross platform families")
-    ax_right.set_ylabel("Median Delta (max-min) in gene-level CNV frequencies\nacross platform families")
+    ax_right.set_xlabel("Mean cross-family correlation")
+    ax_right.set_ylabel("Median frequency range\nacross platform families")
     ax_right.grid(alpha=0.22)
 
     for axis in [ax_left, ax_right]:
