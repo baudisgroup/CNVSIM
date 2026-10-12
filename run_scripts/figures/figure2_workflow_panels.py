@@ -982,13 +982,15 @@ def _select_reference_example(
     reference_key: str | None = None,
 ) -> tuple[pd.Series, int]:
     candidates = references[
-        references["root"].astype(str).eq(root)
-        & references["reference_level"].astype(str).eq("subtype")
+        references["reference_level"].astype(str).eq("subtype")
     ].copy()
     if reference_key is not None:
         candidates = candidates[candidates["reference_key"].astype(str).eq(reference_key)]
         if len(candidates) != 1:
-            raise ValueError(f"{reference_key}: expected one released subtype in {root}")
+            raise ValueError(f"{reference_key}: expected one released subtype")
+        root = str(candidates.iloc[0]["root"])
+    else:
+        candidates = candidates[candidates["root"].astype(str).eq(root)]
     if candidates.empty:
         raise ValueError(f"[{root}] no released subtype reference is available")
     observed = (
@@ -1471,6 +1473,8 @@ def _draw_track2(
         0,
         max(value_range * 1.32, label_ceiling + 0.12 * value_range),
     )
+    # Space above 100% is for labels, not additional carrier-fraction values.
+    axis.set_yticks([tick for tick in axis.get_yticks() if 0 <= tick <= 100])
     axis.set_xticks(chromosome_ticks, chromosome_labels)
     axis.set_xlabel("Chromosome")
     axis.set_ylabel("Raw carrier fraction (%)")
@@ -1516,11 +1520,19 @@ def main() -> None:
     parser.add_argument(
         "--root",
         default="C22_C24",
-        help="Single root used consistently across stages II-V (default: C22_C24).",
+        help="Root for representation, discovery and refinement panels (default: C22_C24).",
     )
     parser.add_argument(
         "--reference-key",
-        help="Released subtype for both signature panels; must belong to --root.",
+        help=(
+            "Released subtype for both signature panels, independent of --root. "
+            "If omitted, an example is selected from --root."
+        ),
+    )
+    parser.add_argument(
+        "--signatures-only",
+        action="store_true",
+        help="Render only the two signature panels and their event tables; skip UMAP and discovery panels.",
     )
     parser.add_argument(
         "--display-space",
@@ -1569,12 +1581,18 @@ def main() -> None:
         "V_track1_architecture",
         "V_track2_gene_events",
     ]
+    if args.signatures_only:
+        output_stems = ["V_track1_architecture", "V_track2_gene_events"]
     output_paths = [out_dir / f"{stem}.png" for stem in output_stems]
     display_table_paths = {
         "track1_events": out_dir / "V_track1_events.tsv",
         "track2_displayed_events": out_dir / "V_track2_displayed_events.tsv",
     }
-    manifest_path = out_dir / "figure2_workflow_panels.manifest.json"
+    manifest_path = out_dir / (
+        "figure2_signature_panels.manifest.json"
+        if args.signatures_only
+        else "figure2_workflow_panels.manifest.json"
+    )
     existing = [
         path for path in [*output_paths, *display_table_paths.values(), manifest_path]
         if path.exists()
@@ -1588,47 +1606,15 @@ def main() -> None:
                 if legacy_path.exists():
                     legacy_path.unlink()
 
-    parameter_dir = analysis_dir / "parameters"
-    candidate_summary_path = parameter_dir / "subsampling_by_candidate.tsv"
-    subsampling_runs_path = parameter_dir / "subsampling_runs.tsv"
-    selected_path = parameter_dir / "selected_parameters.tsv"
-    decisions_path = _find(
-        analysis_dir, "pair_merge_decisions.tsv", "pair merge decisions"
-    )
-    evidence_path = _find(
-        analysis_dir, "pair_boundary_evidence.tsv", "pair boundary evidence"
-    )
     release_tables = atlas_dir / "release_candidate" / "tables"
     references_path = release_tables / "reference_contexts.tsv"
     signatures_path = release_tables / "signature_events.tsv"
     gene_intervals_path = (
         atlas_dir / "projection_bundle_candidate" / "gene_intervals.tsv"
     )
-    candidate_summary = _read(candidate_summary_path)
-    subsampling_runs = _read(subsampling_runs_path)
-    selected_parameters = _read(selected_path)
-    decisions = _read(decisions_path)
-    evidence = _read(evidence_path)
     references = _read(references_path)
     signatures = _read(signatures_path)
     gene_intervals = _read(gene_intervals_path)
-    _require(
-        decisions,
-        {"root", "context_a", "context_b", "comerge_rate"},
-        "pair decisions",
-    )
-    _require(
-        evidence,
-        {
-            "root",
-            "context_a",
-            "context_b",
-            "evidence_type",
-            "supports_boundary_veto",
-            "pair_delta_a_minus_b",
-        },
-        "pair evidence",
-    )
     _require(
         references,
         {
@@ -1659,79 +1645,129 @@ def main() -> None:
         {"gene_symbol", "chrom"},
         "projection gene intervals",
     )
-    merge_example, veto_example = _select_examples(
-        decisions,
-        evidence,
-        str(args.root),
-    )
     reference_example, reference_context = _select_reference_example(
         references,
         signatures,
         str(args.root),
         reference_key=args.reference_key,
     )
-    display_coordinates, display_metadata = _display_embedding(
-        analysis_dir,
-        selected_parameters,
-        str(args.root),
-        display_space=str(args.display_space),
-        umap_min_dist=float(args.umap_min_dist),
-        random_state=int(args.display_random_state),
-    )
-    display_labels = (
-        ("UMAP1", "UMAP2") if display_metadata["method"] == "umap" else ("PC1", "PC2")
-    )
-
-    figures = {
-        "II_comparison_space": _draw_comparison_space(
-            analysis_dir,
+    inputs = {
+        "reference_contexts": str(references_path),
+        "signature_events": str(signatures_path),
+        "gene_intervals": str(gene_intervals_path),
+    }
+    figures = {}
+    display_metadata = None
+    merge_example = veto_example = None
+    if not args.signatures_only:
+        parameter_dir = analysis_dir / "parameters"
+        candidate_summary_path = parameter_dir / "subsampling_by_candidate.tsv"
+        subsampling_runs_path = parameter_dir / "subsampling_runs.tsv"
+        selected_path = parameter_dir / "selected_parameters.tsv"
+        decisions_path = _find(
+            analysis_dir, "pair_merge_decisions.tsv", "pair merge decisions"
+        )
+        evidence_path = _find(
+            analysis_dir, "pair_boundary_evidence.tsv", "pair boundary evidence"
+        )
+        candidate_summary = _read(candidate_summary_path)
+        subsampling_runs = _read(subsampling_runs_path)
+        selected_parameters = _read(selected_path)
+        decisions = _read(decisions_path)
+        evidence = _read(evidence_path)
+        _require(
+            decisions,
+            {"root", "context_a", "context_b", "comerge_rate"},
+            "pair decisions",
+        )
+        _require(
+            evidence,
+            {
+                "root",
+                "context_a",
+                "context_b",
+                "evidence_type",
+                "supports_boundary_veto",
+                "pair_delta_a_minus_b",
+            },
+            "pair evidence",
+        )
+        merge_example, veto_example = _select_examples(
+            decisions,
+            evidence,
             str(args.root),
-            display_coordinates,
-            display_labels,
-            int(args.max_points),
-        ),
-        "III_parameter_candidates": _draw_parameter_landscape(
-            candidate_summary,
-            subsampling_runs,
+        )
+        display_coordinates, display_metadata = _display_embedding(
+            analysis_dir,
             selected_parameters,
             str(args.root),
-        ),
-        "IV_initial_communities": _draw_initial_communities(
-            analysis_dir,
-            str(args.root),
-            display_coordinates,
-            display_labels,
-            int(args.max_points),
-        ),
-        "IV_initial_community_sizes": _draw_community_sizes(
-            analysis_dir,
-            str(args.root),
-            display_coordinates,
-        ),
-        "V_pairwise_comerge": _draw_comerge_pairs(
-            decisions,
-            str(args.root),
-            (
-                merge_example,
-                veto_example,
+            display_space=str(args.display_space),
+            umap_min_dist=float(args.umap_min_dist),
+            random_state=int(args.display_random_state),
+        )
+        display_labels = (
+            ("UMAP1", "UMAP2") if display_metadata["method"] == "umap" else ("PC1", "PC2")
+        )
+        inputs.update({
+            "analysis_dir": str(analysis_dir),
+            "subsampling_candidate_summary": str(candidate_summary_path),
+            "subsampling_runs": str(subsampling_runs_path),
+            "selected_parameters": str(selected_path),
+            "pair_decisions": str(decisions_path),
+            "pair_boundary_evidence": str(evidence_path),
+        })
+        figures.update({
+            "II_comparison_space": _draw_comparison_space(
+                analysis_dir,
+                str(args.root),
+                display_coordinates,
+                display_labels,
+                int(args.max_points),
             ),
-        ),
-        "V_merge_applied": _draw_pair_example(
-            analysis_dir,
-            merge_example,
-            display_coordinates,
-            display_labels,
-            retain=False,
-            maximum_points=max(1200, int(args.max_points) // 2),
-        ),
-        "V_boundary_retained": _draw_pair_example(
-            analysis_dir,
-            veto_example,
-            display_coordinates,
-            display_labels,
-            retain=True,
-            maximum_points=max(1200, int(args.max_points) // 2),
-        ),
+            "III_parameter_candidates": _draw_parameter_landscape(
+                candidate_summary,
+                subsampling_runs,
+                selected_parameters,
+                str(args.root),
+            ),
+            "IV_initial_communities": _draw_initial_communities(
+                analysis_dir,
+                str(args.root),
+                display_coordinates,
+                display_labels,
+                int(args.max_points),
+            ),
+            "IV_initial_community_sizes": _draw_community_sizes(
+                analysis_dir,
+                str(args.root),
+                display_coordinates,
+            ),
+            "V_pairwise_comerge": _draw_comerge_pairs(
+                decisions,
+                str(args.root),
+                (
+                    merge_example,
+                    veto_example,
+                ),
+            ),
+            "V_merge_applied": _draw_pair_example(
+                analysis_dir,
+                merge_example,
+                display_coordinates,
+                display_labels,
+                retain=False,
+                maximum_points=max(1200, int(args.max_points) // 2),
+            ),
+            "V_boundary_retained": _draw_pair_example(
+                analysis_dir,
+                veto_example,
+                display_coordinates,
+                display_labels,
+                retain=True,
+                maximum_points=max(1200, int(args.max_points) // 2),
+            ),
+        })
+    figures.update({
         "V_track1_architecture": _draw_track1(
             signatures,
             reference_example,
@@ -1741,7 +1777,7 @@ def main() -> None:
             reference_example,
             gene_intervals,
         ),
-    }
+    })
     written: dict[str, str] = {}
     fixed_canvas_stems = {
         "IV_initial_communities",
@@ -1776,12 +1812,13 @@ def main() -> None:
         }
 
     manifest = {
-        "schema": "cnvsim_figure2_workflow_panels_v2",
+        "schema": "cnvsim_figure2_workflow_panels_v3",
+        "render_scope": "signatures_only" if args.signatures_only else "all",
         "description": (
             "Title-free, data-driven panels for manual Figure 2A assembly. "
             "No atlas analysis is recomputed."
         ),
-        "representation_root": str(args.root),
+        "representation_root": None if args.signatures_only else str(args.root),
         "display_space": display_metadata,
         "merge_example": _pair_record(merge_example),
         "boundary_retained_example": _pair_record(veto_example),
@@ -1816,22 +1853,13 @@ def main() -> None:
                 "The red boundary line is illustrative, not a fitted decision boundary."
             ),
         },
-        "inputs": {
-            "analysis_dir": str(analysis_dir),
-            "subsampling_candidate_summary": str(candidate_summary_path),
-            "subsampling_runs": str(subsampling_runs_path),
-            "selected_parameters": str(selected_path),
-            "pair_decisions": str(decisions_path),
-            "pair_boundary_evidence": str(evidence_path),
-            "reference_contexts": str(references_path),
-            "signature_events": str(signatures_path),
-            "gene_intervals": str(gene_intervals_path),
-        },
+        "inputs": inputs,
         "outputs": written,
         "display_tables": {key: path.name for key, path in display_table_paths.items()},
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    print("[CNVSIM] Figure 2 workflow panels complete")
+    scope = "signature" if args.signatures_only else "workflow"
+    print(f"[CNVSIM] Figure 2 {scope} panels complete")
     print(
         "  signature example: "
         f"{reference_example['reference_key']} "
