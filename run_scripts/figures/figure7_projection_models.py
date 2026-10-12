@@ -340,16 +340,16 @@ def draw_projection_performance(
 
     definitions = [
         (
-            "Samples assigned (%)",
+            "Assignment coverage (%)",
             "assignment_coverage_percent",
             (80.0, 92.0),
-            "All samples",
+            "Overall",
         ),
         (
-            "Correct among assigned (%)",
+            "Accuracy among assigned (%)",
             "accuracy_among_assigned_percent",
             (99.5, 100.05),
-            "Assigned samples",
+            "Overall",
         ),
     ]
     fig, axes = plt.subplots(
@@ -741,7 +741,7 @@ def draw_tumour_model_concordance(
             fontsize=6.2,
             color=MUTED,
         )
-        _draw_profile_strip(axis, atlas_profile, y=1.18, label="Tumour reference")
+        _draw_profile_strip(axis, atlas_profile, y=1.18, label="Cancer CNV reference")
         _draw_profile_strip(axis, model_profile, y=0.20, label="Cell-line model")
         for chrom in CHROMS:
             if int(chrom) % 2 == 1 or chrom == "22":
@@ -955,7 +955,7 @@ def _draw_model_match(axis: plt.Axes, target: pd.DataFrame) -> None:
     axis.axvline(1.0, color=ORANGE, linestyle="--", linewidth=1.0)
     axis.set_xlim(0, 1.05)
     axis.set_xlabel("Fraction of maximum accepted distance\n(lower = closer)")
-    axis.set_title("CNV-subtype similarity", fontweight="bold", pad=7)
+    axis.set_title("CNV-subtype distance", fontweight="bold", pad=7)
     axis.tick_params(axis="y", length=0)
     _style_axis(axis)
 

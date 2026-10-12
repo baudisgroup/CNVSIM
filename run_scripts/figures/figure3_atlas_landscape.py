@@ -286,7 +286,7 @@ def draw_reference_coverage(coverage: pd.DataFrame, out_path: Path) -> None:
             color=TEXT,
         )
     axis.set_yticks(y, labels, fontsize=PAPER_SMALL_TEXT_SIZE)
-    axis.set_xlabel("Number of tumour analyses in atlas")
+    axis.set_xlabel("Number of CNV analyses in atlas")
     axis.set_xlim(0, max(max_members * 1.42, 2.0))
     axis.text(
         subtype_column_x,
@@ -710,7 +710,7 @@ def draw_stability_heatmap(
     )
     colorbar.set_ticks([0.0, 0.5, 1.0])
     colorbar.set_label(
-        "Gate value",
+        "Metric value",
         color=TEXT,
         labelpad=2,
         fontsize=PAPER_SMALL_TEXT_SIZE,
