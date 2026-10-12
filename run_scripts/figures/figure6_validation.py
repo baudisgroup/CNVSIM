@@ -381,7 +381,7 @@ def draw_technical_composition(
         cax=color_axis,
         orientation="vertical",
     )
-    colorbar.set_label("Within-subtype sample fraction", labelpad=5)
+    colorbar.set_label("Within-subtype analysis fraction", labelpad=5)
     colorbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8])
     colorbar.set_ticklabels(["0", "0.2", "0.4", "0.6", "≥0.8"])
     colorbar.outline.set_visible(False)
@@ -582,7 +582,7 @@ def draw_signature_recovery(
                 markeredgecolor=ORANGE,
                 markeredgewidth=1.25,
                 markersize=6,
-                label="Sample recovery / signature similarity",
+                label="Analysis recovery / signature similarity",
             ),
         ],
         loc="upper center",
