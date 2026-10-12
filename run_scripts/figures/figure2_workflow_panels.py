@@ -18,7 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as path_effects
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from matplotlib.font_manager import FontProperties
+from matplotlib.patches import Patch, Rectangle
 import numpy as np
 import pandas as pd
 
@@ -42,6 +43,12 @@ PLATFORM_COLORS = {
     "Arrays_LowRes": "#E8753D",
     "NGS_Based": "#3B6FB6",
     "Other": GREY,
+}
+PLATFORM_LABELS = {
+    "Arrays_HighRes": "High-resolution arrays",
+    "Arrays_LowRes": "Low-resolution arrays/CGH",
+    "NGS_Based": "NGS-based assays",
+    "Other": "Other/unknown",
 }
 COMMUNITY_COLORS = [
     "#007C83",
@@ -114,49 +121,6 @@ def _find(analysis_dir: Path, filename: str, label: str) -> Path:
             + "\n  ".join(map(str, candidates))
         )
     return candidates[0]
-
-
-def _find_track1_profiles(
-    analysis_dir: Path,
-    *,
-    root: str,
-    contexts: set[int],
-) -> Path:
-    matches = sorted(analysis_dir.rglob("track1_context_profiles.parquet"))
-    if not matches:
-        raise FileNotFoundError(
-            "Cannot locate Track 1 profiles: track1_context_profiles.parquet"
-        )
-    compatible: list[Path] = []
-    observed: dict[str, list[int]] = {}
-    for path in matches:
-        index = pd.read_parquet(path, columns=["root", "context"])
-        root_contexts = set(
-            pd.to_numeric(
-                index.loc[index["root"].astype(str).eq(root), "context"],
-                errors="coerce",
-            )
-            .dropna()
-            .astype(int)
-        )
-        observed[str(path)] = sorted(root_contexts)
-        if contexts.issubset(root_contexts):
-            compatible.append(path)
-    if not compatible:
-        details = "\n  ".join(f"{path}: {values}" for path, values in observed.items())
-        raise ValueError(
-            f"No Track 1 profile table covers {root} contexts "
-            f"{sorted(contexts)}. Observed:\n  {details}"
-        )
-    compatible.sort(
-        key=lambda path: (
-            0 if "refined_all" in path.parts else 1,
-            0 if "provisional" not in path.parts else 1,
-            len(path.parts),
-            str(path),
-        )
-    )
-    return compatible[0]
 
 
 def _require(frame: pd.DataFrame, columns: set[str], label: str) -> None:
@@ -465,7 +429,7 @@ def _draw_comparison_space(
             alpha=0.40,
             linewidths=0,
             rasterized=True,
-            label=platform.replace("_", " "),
+            label=PLATFORM_LABELS[platform],
             zorder=2,
         )
     axis.set_xlim(_robust_limits(frame["x"]))
@@ -617,18 +581,18 @@ def _draw_parameter_landscape(
         fontsize=6.8,
         color=MUTED,
     )
-    axis.text(0.20, header_y, "PCs · k · r", ha="left", **header_style)
+    axis.text(0.20, header_y, r"PCs $\cdot$ K $\cdot$ $\gamma$", ha="left", **header_style)
     axis.text(
         ari_left,
         header_y,
-        "ARI across repeats",
+        "Subsampling ARI",
         ha="left",
         **header_style,
     )
     axis.text(
         plateau_left,
         header_y,
-        "Plateau",
+        "Plateau width",
         ha="left",
         **header_style,
     )
@@ -957,7 +921,7 @@ def _draw_community_sizes(
             color=TEXT,
         )
     axis.set_yticks(y, [f"C{int(context)}" for context in data.index])
-    axis.set_xlabel("Samples")
+    axis.set_xlabel("Analyses")
     axis.set_xlim(0, float(data.max()) + 7 * offset)
     _clean(axis, grid_axis="x")
     figure.subplots_adjust(left=0.16, right=0.97, top=0.97, bottom=0.28)
@@ -1015,11 +979,16 @@ def _select_reference_example(
     references: pd.DataFrame,
     signatures: pd.DataFrame,
     root: str,
+    reference_key: str | None = None,
 ) -> tuple[pd.Series, int]:
     candidates = references[
         references["root"].astype(str).eq(root)
         & references["reference_level"].astype(str).eq("subtype")
     ].copy()
+    if reference_key is not None:
+        candidates = candidates[candidates["reference_key"].astype(str).eq(reference_key)]
+        if len(candidates) != 1:
+            raise ValueError(f"{reference_key}: expected one released subtype in {root}")
     if candidates.empty:
         raise ValueError(f"[{root}] no released subtype reference is available")
     observed = (
@@ -1042,6 +1011,12 @@ def _select_reference_example(
         .fillna(0)
         .astype(int)
     )
+    for track in ("track1", "track2"):
+        count_column = f"n_{track}_events"
+        if count_column in candidates:
+            expected = pd.to_numeric(candidates[count_column], errors="raise")
+            if not expected.eq(candidates[f"_{track}_events"]).all():
+                raise ValueError(f"{track} counts differ between reference and signature tables")
     candidates = candidates[
         candidates["_track1_events"].gt(0) & candidates["_track2_events"].gt(0)
     ].copy()
@@ -1144,7 +1119,7 @@ def _draw_comerge_pairs(
             label=label,
         )
         for face, edge, label in (
-            (TEAL, TEAL, "co-merged"),
+            (TEAL, TEAL, "co-clustered"),
             ("#E7ECEC", "#C7D0D2", "separate"),
         )
     ]
@@ -1282,112 +1257,37 @@ def _draw_pair_example(
     return figure
 
 
-def _draw_track1(
-    profiles: pd.DataFrame,
-    reference: pd.Series,
-    context: int,
-) -> plt.Figure:
-    figure, axis = plt.subplots(figsize=REFINEMENT_PANEL_SIZE)
-    root = str(reference["root"])
+def _track1_events(signatures: pd.DataFrame, reference: pd.Series) -> pd.DataFrame:
     reference_key = str(reference["reference_key"])
-    root_profiles = profiles[
-        profiles["root"].astype(str).eq(root)
-        & profiles["context"].astype(int).eq(int(context))
+    events = signatures[
+        signatures["reference_key"].astype(str).eq(reference_key)
+        & signatures["track"].astype(str).eq("track1")
     ].copy()
-    if root_profiles.empty:
-        raise ValueError(
-            f"Track 1 profiles do not contain {reference_key} "
-            f"(refined context {context})"
-        )
-    profile = root_profiles.drop_duplicates("context", keep="first").iloc[0]
-    x = np.arange(1, 23)
-    required = {
-        f"CHR|chr{chromosome}_{event}" for chromosome in x for event in ("gain", "loss")
-    }
-    missing = sorted(required - set(root_profiles.columns))
-    if missing:
-        raise KeyError(f"Track 1 profiles are missing columns: {missing}")
-    gain = np.array(
-        [profile[f"CHR|chr{chromosome}_gain"] for chromosome in x],
-        dtype=float,
-    )
-    loss = -np.array(
-        [profile[f"CHR|chr{chromosome}_loss"] for chromosome in x],
-        dtype=float,
-    )
-    loss = np.abs(loss)
-    gain_scale = max(float(np.nanmax(gain)), 1e-9)
-    loss_scale = max(float(np.nanmax(loss)), 1e-9)
-    baseline = "#F2EFE9"
-    gain_cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
-        "cnvsim_gain", [baseline, "#F4C5B4", ORANGE]
-    )
-    loss_cmap = matplotlib.colors.LinearSegmentedColormap.from_list(
-        "cnvsim_loss", [baseline, "#C9D9EA", BLUE]
-    )
-    for chromosome, gain_value, loss_value in zip(x, gain, loss, strict=True):
-        axis.add_patch(
-            Rectangle(
-                (chromosome - 0.38, 1.12),
-                0.72,
-                0.62,
-                facecolor=gain_cmap(np.clip(gain_value / gain_scale, 0, 1)),
-                edgecolor="white",
-                linewidth=0.55,
-            )
-        )
-        axis.add_patch(
-            Rectangle(
-                (chromosome - 0.38, 0.12),
-                0.72,
-                0.62,
-                facecolor=loss_cmap(np.clip(loss_value / loss_scale, 0, 1)),
-                edgecolor="white",
-                linewidth=0.55,
-            )
-        )
+    if events.empty:
+        raise ValueError(f"{reference_key}: no released Track 1 events")
+    events["chromosome"] = events["feature"].map(_autosome_number)
+    if events["chromosome"].isna().any() or not events["event"].isin(["gain", "loss"]).all():
+        raise ValueError("Track 1 requires autosomal gain/loss events")
+    return events
 
-    strongest_gain = int(np.nanargmax(gain))
-    strongest_loss = int(np.nanargmax(loss))
-    if gain[strongest_gain] >= loss[strongest_loss]:
-        strongest = strongest_gain
-        row_y = 1.12
-        label = f"chr{strongest + 1} gain"
-        text_y = 1.43
-    else:
-        strongest = strongest_loss
-        row_y = 0.12
-        label = f"chr{strongest + 1} loss"
-        text_y = 0.43
-    axis.add_patch(
-        Rectangle(
-            (strongest + 1 - 0.41, row_y - 0.03),
-            0.78,
-            0.68,
-            fill=False,
-            edgecolor=TEXT,
-            linewidth=1.35,
-            zorder=4,
-        )
-    )
-    axis.annotate(
-        label,
-        xy=(strongest + 1, row_y + 0.31),
-        xytext=(min(strongest + 3.1, 18.2), text_y),
-        color=TEXT,
-        fontsize=7.1,
-        fontweight="bold",
-        ha="left",
-        va="center",
-        arrowprops={
-            "arrowstyle": "-|>",
-            "color": TEXT,
-            "linewidth": 0.75,
-            "shrinkA": 2,
-            "shrinkB": 2,
-        },
-        zorder=5,
-    )
+
+def _draw_track1(signatures: pd.DataFrame, reference: pd.Series) -> plt.Figure:
+    figure, axis = plt.subplots(figsize=REFINEMENT_PANEL_SIZE)
+    events = _track1_events(signatures, reference)
+    released = set(zip(events["chromosome"].astype(int), events["event"]))
+    # Presence of a released event is categorical; do not rescale tiny coverage values.
+    for chromosome in range(1, 23):
+        for event, row_y, color in (("gain", 1.12, ORANGE), ("loss", 0.12, BLUE)):
+            axis.add_patch(
+                Rectangle(
+                    (chromosome - 0.38, row_y),
+                    0.72,
+                    0.62,
+                    facecolor=color if (chromosome, event) in released else LIGHT,
+                    edgecolor="white",
+                    linewidth=0.55,
+                )
+            )
     axis.set_xlim(0.35, 22.65)
     axis.set_ylim(-0.02, 1.9)
     axis.set_xticks([1, 5, 9, 13, 17, 21])
@@ -1397,7 +1297,11 @@ def _draw_track1(
     axis.tick_params(axis="x", length=2.5, color=MUTED)
     for spine in axis.spines.values():
         spine.set_visible(False)
-    figure.subplots_adjust(left=0.16, right=0.99, top=0.98, bottom=0.22)
+    axis.legend(
+        handles=[Patch(facecolor=LIGHT, edgecolor=GRID, label="No released event")],
+        loc="lower center", bbox_to_anchor=(0.5, 1.01), frameon=False, fontsize=6.4,
+    )
+    figure.subplots_adjust(left=0.16, right=0.99, top=0.90, bottom=0.22)
     return figure
 
 
@@ -1433,12 +1337,11 @@ def _select_track2_markers(data: pd.DataFrame, maximum: int = 7) -> pd.DataFrame
     )
 
 
-def _draw_track2(
+def _track2_display_data(
     signatures: pd.DataFrame,
     reference: pd.Series,
     gene_intervals: pd.DataFrame,
-) -> plt.Figure:
-    figure, axis = plt.subplots(figsize=REFINEMENT_PANEL_SIZE)
+) -> pd.DataFrame:
     reference_key = str(reference["reference_key"])
     data = signatures[
         signatures["reference_key"].astype(str).eq(reference_key)
@@ -1463,7 +1366,23 @@ def _draw_track2(
         raise ValueError(
             f"No chromosome-mapped Track 2 events are available for {reference_key}"
         )
+    if not data["context_value"].between(0, 1).all():
+        raise ValueError("Track 2 raw carrier fractions must be in [0, 1]")
+    if not data["event"].isin(["gain", "loss"]).all():
+        raise ValueError("Track 2 requires gain/loss events")
     data = _select_track2_markers(data).reset_index(drop=True)
+    data["raw_carrier_fraction_percent"] = 100.0 * data["context_value"]
+    return data
+
+
+def _draw_track2(
+    signatures: pd.DataFrame,
+    reference: pd.Series,
+    gene_intervals: pd.DataFrame,
+) -> plt.Figure:
+    figure, axis = plt.subplots(figsize=REFINEMENT_PANEL_SIZE)
+    figure.subplots_adjust(left=0.17, right=0.95, top=0.83, bottom=0.22)
+    data = _track2_display_data(signatures, reference, gene_intervals)
     positions = np.zeros(len(data), dtype=float)
     chromosome_ticks: list[float] = []
     chromosome_labels: list[str] = []
@@ -1475,7 +1394,7 @@ def _draw_track2(
         chromosome_ticks.append(float(group_positions.mean()))
         chromosome_labels.append(str(chromosome))
         cursor = float(group_positions[-1]) + 1.8
-    values = data["context_value"].to_numpy(float) * 100.0
+    values = data["raw_carrier_fraction_percent"].to_numpy(float)
     events = data["event"].astype(str).str.lower().to_numpy()
     colors = np.where(events == "gain", ORANGE, BLUE)
     for position, value, color in zip(positions, values, colors, strict=True):
@@ -1491,6 +1410,11 @@ def _draw_track2(
     )
     value_range = max(float(np.nanmax(values)), 1.0)
     label_positions: list[tuple[float, float]] = []
+    label_intervals: list[tuple[float, float, float]] = []
+    x_limits = (float(positions.min()) - 0.75, float(positions.max()) + 0.75)
+    axis.set_xlim(*x_limits)
+    renderer = figure.canvas.get_renderer()
+    label_font = FontProperties(size=6.7, weight="bold")
     for rank, (position, value, feature, event) in enumerate(
         zip(
             positions,
@@ -1508,15 +1432,22 @@ def _draw_track2(
             direction = 1.0 if rank % 2 == 0 else -1.0
         label_x = position + 0.2 * direction
         label_y = value + 0.085 * value_range
+        label_text = f"{feature}{'+' if event == 'gain' else '-'}"
+        width_pixels = renderer.get_text_width_height_descent(label_text, label_font, False)[0]
+        width = width_pixels / axis.get_window_extent().width * (x_limits[1] - x_limits[0])
+        left = label_x if direction > 0 else label_x - width
+        right = label_x + width if direction > 0 else label_x
+        # Opposite text alignments can overlap even when their anchor points do not.
         while any(
-            abs(label_x - previous_x) < 1.35
+            left < previous_right + 0.12 and right > previous_left - 0.12
             and abs(label_y - previous_y) < 0.16 * value_range
-            for previous_x, previous_y in label_positions
+            for previous_left, previous_right, previous_y in label_intervals
         ):
             label_y += 0.16 * value_range
         label_positions.append((label_x, label_y))
+        label_intervals.append((left, right, label_y))
         axis.annotate(
-            f"{feature}{'+' if event == 'gain' else '-'}",
+            label_text,
             xy=(position, value),
             xytext=(label_x, label_y),
             textcoords="data",
@@ -1537,36 +1468,27 @@ def _draw_track2(
     axis.set_xlim(float(positions.min()) - 0.75, float(positions.max()) + 0.75)
     label_ceiling = max(label_y for _, label_y in label_positions)
     axis.set_ylim(
-        -max(1.0, value_range * 0.08),
+        0,
         max(value_range * 1.32, label_ceiling + 0.12 * value_range),
     )
     axis.set_xticks(chromosome_ticks, chromosome_labels)
     axis.set_xlabel("Chromosome")
-    axis.set_ylabel("Carrier fraction (%)")
+    axis.set_ylabel("Raw carrier fraction (%)")
     _clean(axis, grid_axis="y")
     handles = [
         Line2D(
             [0],
             [0],
             marker="o",
-            color=ORANGE,
+            color=color,
             linestyle="None",
-            markerfacecolor=ORANGE,
+            markerfacecolor=color,
             markeredgecolor="none",
             markersize=5,
-            label="gain marker",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color=BLUE,
-            linestyle="None",
-            markerfacecolor=BLUE,
-            markeredgecolor="none",
-            markersize=5,
-            label="loss marker",
-        ),
+            label=event.capitalize(),
+        )
+        for event, color in (("gain", ORANGE), ("loss", BLUE))
+        if event in set(events)
     ]
     axis.legend(
         handles=handles,
@@ -1595,6 +1517,10 @@ def main() -> None:
         "--root",
         default="C22_C24",
         help="Single root used consistently across stages II-V (default: C22_C24).",
+    )
+    parser.add_argument(
+        "--reference-key",
+        help="Released subtype for both signature panels; must belong to --root.",
     )
     parser.add_argument(
         "--display-space",
@@ -1644,8 +1570,15 @@ def main() -> None:
         "V_track2_gene_events",
     ]
     output_paths = [out_dir / f"{stem}.png" for stem in output_stems]
+    display_table_paths = {
+        "track1_events": out_dir / "V_track1_events.tsv",
+        "track2_displayed_events": out_dir / "V_track2_displayed_events.tsv",
+    }
     manifest_path = out_dir / "figure2_workflow_panels.manifest.json"
-    existing = [path for path in [*output_paths, manifest_path] if path.exists()]
+    existing = [
+        path for path in [*output_paths, *display_table_paths.values(), manifest_path]
+        if path.exists()
+    ]
     if existing and not args.overwrite:
         raise FileExistsError(f"Output exists; pass --overwrite: {existing[0]}")
     if args.overwrite:
@@ -1735,14 +1668,8 @@ def main() -> None:
         references,
         signatures,
         str(args.root),
+        reference_key=args.reference_key,
     )
-    track1_path = _find_track1_profiles(
-        analysis_dir,
-        root=str(args.root),
-        contexts={int(reference_context)},
-    )
-    track1_profiles = _read(track1_path)
-    _require(track1_profiles, {"root", "context"}, "Track 1 profiles")
     display_coordinates, display_metadata = _display_embedding(
         analysis_dir,
         selected_parameters,
@@ -1806,9 +1733,8 @@ def main() -> None:
             maximum_points=max(1200, int(args.max_points) // 2),
         ),
         "V_track1_architecture": _draw_track1(
-            track1_profiles,
+            signatures,
             reference_example,
-            reference_context,
         ),
         "V_track2_gene_events": _draw_track2(
             signatures,
@@ -1834,6 +1760,10 @@ def main() -> None:
             fixed_canvas=stem in fixed_canvas_stems,
         )
         written[stem] = path.name
+    track1_events = _track1_events(signatures, reference_example)
+    track2_displayed = _track2_display_data(signatures, reference_example, gene_intervals)
+    track1_events.to_csv(display_table_paths["track1_events"], sep="\t", index=False)
+    track2_displayed.to_csv(display_table_paths["track2_displayed_events"], sep="\t", index=False)
 
     def _pair_record(row: pd.Series | None) -> dict[str, object] | None:
         if row is None:
@@ -1846,7 +1776,7 @@ def main() -> None:
         }
 
     manifest = {
-        "schema": "cnvsim_figure2_workflow_panels_v1",
+        "schema": "cnvsim_figure2_workflow_panels_v2",
         "description": (
             "Title-free, data-driven panels for manual Figure 2A assembly. "
             "No atlas analysis is recomputed."
@@ -1863,6 +1793,28 @@ def main() -> None:
             "n_definition_members": int(reference_example["n_definition_members"]),
             "n_track1_events": int(reference_example["_track1_events"]),
             "n_track2_events": int(reference_example["_track2_events"]),
+            "n_track2_displayed": int(len(track2_displayed)),
+        },
+        "panel_encoding": {
+            "track1": (
+                "Categorical presence of released chromosome gain/loss events. "
+                "Grey means no released event, not absence of CNV or copy-neutrality. "
+                "No per-direction coverage scaling is used."
+            ),
+            "track2": (
+                "Released events selected using the existing raw-prevalence ranking. "
+                "Height is context_value * 100, the fraction of analyses with a nonzero "
+                "raw gene-event fraction, not relative enrichment or CNV amplitude. "
+                "Signature selection uses within-analysis mean-centred fractions."
+            ),
+            "parameter_selection": (
+                "ARI compares each subsampled partition with the full-data partition. "
+                "The selected highlight does not imply all automatic gates passed."
+            ),
+            "boundary_refinement": (
+                "Dots summarize co-clustering counts, not repeat order. "
+                "The red boundary line is illustrative, not a fitted decision boundary."
+            ),
         },
         "inputs": {
             "analysis_dir": str(analysis_dir),
@@ -1871,12 +1823,12 @@ def main() -> None:
             "selected_parameters": str(selected_path),
             "pair_decisions": str(decisions_path),
             "pair_boundary_evidence": str(evidence_path),
-            "track1_profiles": str(track1_path),
             "reference_contexts": str(references_path),
             "signature_events": str(signatures_path),
             "gene_intervals": str(gene_intervals_path),
         },
         "outputs": written,
+        "display_tables": {key: path.name for key, path in display_table_paths.items()},
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print("[CNVSIM] Figure 2 workflow panels complete")
