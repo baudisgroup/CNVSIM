@@ -493,7 +493,7 @@ def build_projection_bundle(
             "autosomes_only": True,
             "low_fraction_threshold": float(low_fraction_threshold),
             "high_fraction_threshold": float(high_fraction_threshold),
-            "feature_value": "low_event_indicator + 2 * high_event_indicator",
+            "feature_value": "gain_or_loss_indicator + 2 * high_level_indicator",
         },
         "top_candidates": int(top_candidates),
         "conditional_reference": {

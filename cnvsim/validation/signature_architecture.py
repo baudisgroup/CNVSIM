@@ -156,7 +156,7 @@ def _signed_direction(event: object, direction: object) -> int:
 
 
 def _segment_event_channel(frame: pd.DataFrame) -> pd.Series:
-    """Recover low/high gain/loss channels without collapsing amplitude."""
+    """Recover segment gain/loss states while retaining high-level distinctions."""
 
     text = pd.Series("", index=frame.index, dtype="object")
     for column in SEGMENT_STATE_COLUMNS:
@@ -189,9 +189,9 @@ def _segment_event_channel(frame: pd.DataFrame) -> pd.Series:
 def _marker_segment_channels(event: str, amplitude: str) -> tuple[str, ...]:
     """Return raw channels contributing to one encoded marker.
 
-    Low-level features are inclusive: a high-level gain/loss also satisfies
-    the corresponding low-level event flag. High-level features remain
-    specific to their high-amplitude segment channel.
+    Gain/loss channels (``all``, or legacy ``low``) include corresponding
+    high-level segments. High-level channels remain specific to their
+    high-amplitude segment state.
     """
 
     if amplitude == "high":
@@ -577,7 +577,7 @@ def build_track2_segment_architecture(
     if missing_segment_channels:
         raise ValueError(
             "Raw segment states cannot reconstruct released Track 2 amplitude "
-            f"channels: {missing_segment_channels}. Preserve low/high CNV state "
+            f"channels: {missing_segment_channels}. Preserve high-level CNV state "
             "labels in the segment source."
         )
 

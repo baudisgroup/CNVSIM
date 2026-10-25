@@ -32,6 +32,9 @@ from cnvsim.validation.config import SignatureRecoveryParams
 
 CORE_REFERENCE_PATTERN = re.compile(r"^(?P<root>.+)-CTX(?P<context>\d+)$")
 TRACK2_RELEASE_CHANNELS = {
+    ("gain", "all"): "dup_frac",
+    ("loss", "all"): "del_frac",
+    # Retain legacy "low" labels for earlier release tables.
     ("gain", "low"): "dup_frac",
     ("gain", "high"): "hldup_frac",
     ("loss", "low"): "del_frac",

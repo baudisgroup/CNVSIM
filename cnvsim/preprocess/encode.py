@@ -3,10 +3,10 @@ from __future__ import annotations
 """Encode sample-gene CNV summaries as root-specific feature matrices.
 
 For each grouped ICD-O-T root, this module converts gene-level overlap
-fractions into separate ``GENE__gain`` and ``GENE__loss`` columns. Low-level
-and high-level event indicators contribute 1 and 2 to the corresponding score,
-respectively. A sample-gene feature can therefore range from 0 to 3 when both
-indicators are present.
+fractions into separate ``GENE__gain`` and ``GENE__loss`` columns. Gain/loss
+indicators include corresponding high-level events. Inclusive and high-level
+indicators contribute 1 and 2 to the corresponding score, respectively.
+A sample-gene feature can therefore range from 0 to 3 when both are present.
 
 Output per root
 ---------------
@@ -62,10 +62,12 @@ def add_cnv_event_flags(
     min_frac_low: float = 0.05,
     min_frac_high: float = 0.10,
 ) -> pd.DataFrame:
-    """Add Boolean low- and high-level gain/loss indicators.
+    """Add Boolean inclusive and high-level gain/loss indicators.
 
     The four input columns are fractions of each gene interval covered by the
-    corresponding CNV event class. No rows are aggregated in this function.
+    corresponding CNV event class. The legacy names ``low_gain``, ``low_loss``
+    and ``min_frac_low`` refer to inclusive gain/loss channels, not mutually
+    exclusive low-amplitude events. No rows are aggregated in this function.
     """
 
     out = df.copy()
