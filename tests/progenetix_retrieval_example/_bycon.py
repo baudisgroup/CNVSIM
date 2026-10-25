@@ -147,12 +147,30 @@ def exact_biosample(resource: str, biosample_id: str) -> dict[str, Any] | None:
     return matches[0] if matches else None
 
 
-def biosample_variants(resource: str, biosample_id: str) -> list[dict[str, Any]]:
+def analysis_variants(resource: str, analysis_id: str) -> list[dict[str, Any]]:
+    """Return the variants of one analysis from the analysis-scoped endpoint.
+
+    The endpoint scopes results to the requested analysis, so variants are
+    attributed without relying on ``caseLevelData.analysisId``, which current
+    bycon responses may omit.
+    """
+
     return beacon_query(
-        f"biosamples/{biosample_id}/g_variants",
+        f"analyses/{analysis_id}/g_variants",
         resource=resource,
         limit=0,
     )
+
+
+def variant_analysis_ids(variant: dict[str, Any]) -> set[str]:
+    return {
+        str(case.get("analysisId") or case.get("analysis_id") or "").strip()
+        for case in variant.get("caseLevelData", []) or []
+    } - {""}
+
+
+def location_sequence_id(location: dict[str, Any]) -> str:
+    return str(location.get("sequenceId") or location.get("sequence_id") or "")
 
 
 def cnv_state(variation: dict[str, Any]) -> str | None:
@@ -248,43 +266,41 @@ def prepare_projection_inputs(
     for (resource, biosample_id), group in selected.groupby(
         ["resource", "biosample_id"], sort=True
     ):
-        variants = biosample_variants(str(resource), str(biosample_id))
-        selected_ids = set(group["analysis_id"].astype(str))
+        selected_ids = sorted(set(group["analysis_id"].astype(str)))
         counts = {analysis_id: 0 for analysis_id in selected_ids}
         invalid_coordinate_counts = {
             analysis_id: 0 for analysis_id in selected_ids
         }
-        for variant in variants:
-            variation = variant.get("variation", {}) or {}
-            if variation.get("type") != "CopyNumberChange":
-                continue
-            state = cnv_state(variation)
-            if state is None:
-                continue
-            analysis_ids = {
-                str(case.get("analysisId", "")).strip()
-                for case in variant.get("caseLevelData", []) or []
-            }
-            matched_analysis_ids = sorted(selected_ids & analysis_ids)
-            if not matched_analysis_ids:
-                continue
-            location = variation.get("location", {}) or {}
-            chromosome = str(location.get("chromosome", "")).removeprefix("chr")
-            if chromosome not in GRCH38_AUTOSOME_REFSEQ:
-                continue
-            sequence_id = str(location.get("sequence_id", ""))
-            if sequence_id != GRCH38_AUTOSOME_REFSEQ[chromosome]:
-                raise ValueError(
-                    f"Analysis under {biosample_id} is not consistently GRCh38: "
-                    f"chromosome {chromosome}, sequence {sequence_id or 'missing'}"
-                )
-            start = int(location["start"])
-            end = int(location["end"])
-            if start < 0 or end <= start:
-                for analysis_id in matched_analysis_ids:
+        for analysis_id in selected_ids:
+            for variant in analysis_variants(str(resource), analysis_id):
+                variation = variant.get("variation", {}) or {}
+                if variation.get("type") != "CopyNumberChange":
+                    continue
+                state = cnv_state(variation)
+                if state is None:
+                    continue
+                reported_ids = variant_analysis_ids(variant)
+                if reported_ids and analysis_id not in reported_ids:
+                    raise ValueError(
+                        f"Variant returned for {analysis_id} reports other "
+                        f"analyses: {sorted(reported_ids)}"
+                    )
+                location = variation.get("location", {}) or {}
+                chromosome = str(location.get("chromosome", "")).removeprefix("chr")
+                if chromosome not in GRCH38_AUTOSOME_REFSEQ:
+                    continue
+                sequence_id = location_sequence_id(location)
+                if sequence_id != GRCH38_AUTOSOME_REFSEQ[chromosome]:
+                    raise ValueError(
+                        f"Analysis {analysis_id} under {biosample_id} is not "
+                        f"consistently GRCh38: chromosome {chromosome}, "
+                        f"sequence {sequence_id or 'missing'}"
+                    )
+                start = int(location["start"])
+                end = int(location["end"])
+                if start < 0 or end <= start:
                     invalid_coordinate_counts[analysis_id] += 1
-                continue
-            for analysis_id in matched_analysis_ids:
+                    continue
                 segment_rows.append(
                     {
                         "sample_id": analysis_id,
