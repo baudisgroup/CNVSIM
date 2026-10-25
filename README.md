@@ -2,7 +2,7 @@
 
 CNVSIM is a pan-cancer reference atlas of recurrent copy-number variation
 (CNV) patterns and a Python workflow for assigning new CNV profiles to
-calibrated cancer-specific subtypes. Version 1.0.0 contains 204,587 tumour
+calibrated cancer-specific subtypes. Version 1.0.0 contains 204,587 neoplastic
 analyses across 19 cancer-root spaces, comprising 103 core subtypes and 9
 conditional subtypes.
 
@@ -13,14 +13,16 @@ chromosome-scale signatures and Track 2 enriched gene-level signatures. Panel B
 shows the user-facing projection workflow, in which new GRCh38 CNV segments
 are transformed into the appropriate root-specific reference space, evaluated
 first against core subtypes and, when needed, against an eligible conditional
-layer, and linked to their nearest reference tumour analyses.
+layer, and linked to their nearest reference neoplastic analyses.
 
 Building on this frozen reference, the public workflows support two main use
 cases:
 
-- project a new tumour or cell-line CNV profile into the frozen CNVSIM atlas;
+- project a CNV profile from a new neoplastic sample or cell line into the
+  frozen CNVSIM atlas;
 - query ranked Cellosaurus cell lines for a CNVSIM subtype, or identify the
-  matched tumour-derived reference subtype for a specified cell line.
+  matched reference subtype, derived from neoplastic samples, for a specified
+  cell line.
 
 <p align="center">
   <a href="docs/assets/cnvsim_workflow.png">
@@ -138,7 +140,7 @@ python -m run_scripts.project_samples \
 |---|---|
 | `projection_assignments.tsv` | **Start here.** One row per query sample reporting whether it received a confident assignment, the matched subtype, and whether that subtype came from the core or conditional reference layer. Samples that do not pass the calibrated criteria are reported as ambiguous or unresolved. |
 | `projection_candidates.tsv` | The alternative subtypes considered for each sample, ordered by their projection rank. |
-| `nearest_reference_samples.tsv` | The individual atlas tumour analyses most similar to each query, ranked from smallest to largest distance. |
+| `nearest_reference_samples.tsv` | The individual neoplastic analyses in the atlas most similar to each query, ranked from smallest to largest distance. |
 | `query_coordinates.parquet` | The numerical position of each query in its root-specific comparison space. This file is mainly intended for visualization and technical audit. |
 | `projection_manifest.json` | A record of the input files, projection bundle, generated outputs, and assignment counts for reproducibility. |
 
@@ -153,9 +155,9 @@ available under `atlas/` in the data release.
 
 ## Retrieve and project a Progenetix example
 
-The test module can query projectable tumour or cancer cell-line CNV analyses
-from the public Progenetix/bycon Beacon API and convert selected analyses into
-the two CNVSIM input tables.
+The test module can query projectable CNV analyses from neoplastic samples
+or cancer cell lines through the public Progenetix/bycon Beacon API and
+convert selected analyses into the two CNVSIM input tables.
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "18px"}}}%%
@@ -217,7 +219,7 @@ for model queries, or project your own GRCh38 CNV profiles with `samples.tsv`
 and `segments.tsv`; these workflows do not require the live API.
 
 For example, the following command retrieves CNV analyses for two specified
-Progenetix tumour biosamples without running a topography filter:
+Progenetix neoplastic biosamples without running a topography filter:
 
 ```bash
 python tests/progenetix_retrieval_example/query_candidates.py \
@@ -282,7 +284,7 @@ python run_scripts/applications/query_experimental_models.py \
   --top-n 5
 ```
 
-### Look up the tumour-derived reference subtype for a cell line
+### Look up the reference subtype for a cell line
 
 ```bash
 python run_scripts/applications/query_experimental_models.py \
@@ -313,7 +315,7 @@ Projection and cell-line query tools run directly on the data release; full atla
 
 ## External resources used by CNVSIM
 
-- **Progenetix** — source of the harmonized tumour and cancer cell-line CNV
+- **Progenetix** — source of the harmonized neoplastic and cancer cell-line CNV
   profiles and associated metadata used to construct the atlas and cell-line
   catalogue, and host of the bycon-powered Beacon API used by the retrieval
   example. Huang Q, Carrio-Cordo P, Gao B, Paloots R, Baudis M. [The
