@@ -40,7 +40,7 @@ projection bundle, validation summaries, source data, and cell-line catalogue
 are distributed separately as the **CNVSIM Atlas v1.0.0 data release**.
 
 - Code: <https://github.com/baudisgroup/CNVSIM>
-- Data release: **[Zenodo DOI to be added before release]**
+- Data release: <https://doi.org/10.5281/zenodo.23642834>
 
 After downloading and extracting the data release, define its location:
 
@@ -311,15 +311,7 @@ distance to the matched subtype.
 
 Projection and cell-line query tools run directly on the data release; full atlas construction, validation, and figure runners also use intermediate analysis-workspace outputs.
 
-## Citation
-
-If you use CNVSIM, please cite both the manuscript and the versioned data
-release:
-
-- Manuscript: **[citation to be added]**
-- Data release: **[Zenodo DOI to be added]**
-
-### External resources used by CNVSIM
+## External resources used by CNVSIM
 
 - **Progenetix** — source of the harmonized tumour and cancer cell-line CNV
   profiles and associated metadata used to construct the atlas and cell-line
