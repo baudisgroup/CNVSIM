@@ -211,6 +211,11 @@ python -m run_scripts.project_samples \
 Use `--resource cell-line` to query the cancercelllines dataset, or one or more
 `--biosample-id` arguments to retrieve specified biosamples directly.
 
+Cell-line retrieval depends on the live `cellz` service, which is currently
+being reorganized. During maintenance, use the frozen `cell_line/` catalogue
+for model queries, or project your own GRCh38 CNV profiles with `samples.tsv`
+and `segments.tsv`; these workflows do not require the live API.
+
 For example, the following command retrieves CNV analyses for two specified
 Progenetix tumour biosamples without running a topography filter:
 
@@ -231,14 +236,14 @@ patterns:
 
 - `/beacon/biosamples?filters=...` finds currently retrievable biosamples;
 - `/beacon/biosamples/{biosample_id}/analyses?limit=0` lists their analyses;
-- `/beacon/biosamples/{biosample_id}/g_variants?limit=0` retrieves CNV records.
+- `/beacon/analyses/{analysis_id}/g_variants?limit=0` retrieves the CNV records
+  of each selected analysis.
 
 For an exact biosample query, the first request instead uses
 `/beacon/biosamples?biosampleIds=...`. Cell-line requests additionally set
 `datasetIds=cellz`. The converter keeps only GRCh38 CNV records on chromosomes
-1-22. If a biosample has multiple analyses, it uses
-`caseLevelData.analysisId` to assign each CNV to the selected analysis and
-prevents profiles from different analyses from being mixed.
+1-22. CNVs are requested per selected analysis, so profiles from different
+analyses of the same biosample are not mixed.
 Progenetix records with non-positive interval length (`end <= start`) are
 excluded and reported per analysis in `retrieval_audit.tsv`; the converter
 stops only when no projectable CNV segment remains for a selected analysis.

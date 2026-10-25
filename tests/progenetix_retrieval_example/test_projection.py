@@ -66,7 +66,7 @@ CASES = [
 
 
 class ProjectionInputSanitizationTest(unittest.TestCase):
-    @patch("_bycon.biosample_variants")
+    @patch("_bycon.analysis_variants")
     def test_zero_length_segments_are_skipped_and_audited(
         self, variants_mock
     ) -> None:
@@ -132,6 +132,88 @@ class ProjectionInputSanitizationTest(unittest.TestCase):
             manifest["counts"]["invalid_coordinate_segment_links_skipped"],
             1,
         )
+
+    @staticmethod
+    def _variant(start, end, *, copy_change="low-level gain", case=None):
+        variant = {
+            "variation": {
+                "type": "CopyNumberChange",
+                "copyChange": copy_change,
+                "location": {
+                    "chromosome": "1",
+                    "sequenceId": "refseq:NC_000001.11",
+                    "start": start,
+                    "end": end,
+                },
+            },
+            "caseLevelData": [case if case is not None else {"variantId": "v"}],
+        }
+        return variant
+
+    @staticmethod
+    def _selection(*analysis_ids):
+        return pd.DataFrame(
+            [
+                {
+                    "selected": "yes",
+                    "resource": "tumour",
+                    "biosample_id": "pgxbs-test",
+                    "analysis_id": analysis_id,
+                    "icdo_topography_id": "C18.9",
+                }
+                for analysis_id in analysis_ids
+            ]
+        )
+
+    @patch("_bycon.analysis_variants")
+    def test_current_response_without_case_analysis_id(self, variants_mock) -> None:
+        variants_mock.return_value = [self._variant(200, 300)]
+        with tempfile.TemporaryDirectory(prefix="cnvsim-input-") as tmp:
+            outputs = prepare_projection_inputs(
+                selection=self._selection("pgxcs-a"),
+                out_dir=Path(tmp) / "inputs",
+                overwrite=True,
+            )
+            segments = pd.read_csv(outputs["segments"], sep="\t")
+        variants_mock.assert_called_once_with("tumour", "pgxcs-a")
+        self.assertEqual(segments["sample_id"].tolist(), ["pgxcs-a"])
+
+    @patch("_bycon.analysis_variants")
+    def test_analyses_of_one_biosample_are_not_mixed(self, variants_mock) -> None:
+        responses = {
+            "pgxcs-a": [self._variant(200, 300)],
+            "pgxcs-b": [
+                self._variant(400, 500, copy_change="high-level loss"),
+                self._variant(600, 700),
+            ],
+        }
+        variants_mock.side_effect = lambda resource, analysis_id: responses[
+            analysis_id
+        ]
+        with tempfile.TemporaryDirectory(prefix="cnvsim-input-") as tmp:
+            outputs = prepare_projection_inputs(
+                selection=self._selection("pgxcs-a", "pgxcs-b"),
+                out_dir=Path(tmp) / "inputs",
+                overwrite=True,
+            )
+            segments = pd.read_csv(outputs["segments"], sep="\t")
+        counts = segments.groupby("sample_id").size().to_dict()
+        self.assertEqual(counts, {"pgxcs-a": 1, "pgxcs-b": 2})
+        b_states = set(segments.loc[segments["sample_id"] == "pgxcs-b", "cnv_state"])
+        self.assertEqual(b_states, {"high_loss", "gain"})
+
+    @patch("_bycon.analysis_variants")
+    def test_conflicting_case_analysis_id_is_rejected(self, variants_mock) -> None:
+        variants_mock.return_value = [
+            self._variant(200, 300, case={"analysisId": "pgxcs-other"})
+        ]
+        with tempfile.TemporaryDirectory(prefix="cnvsim-input-") as tmp:
+            with self.assertRaises(ValueError):
+                prepare_projection_inputs(
+                    selection=self._selection("pgxcs-a"),
+                    out_dir=Path(tmp) / "inputs",
+                    overwrite=True,
+                )
 
 
 @unittest.skipUnless(
