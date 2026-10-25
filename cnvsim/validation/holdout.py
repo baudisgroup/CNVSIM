@@ -22,7 +22,7 @@ from cnvsim.analysis.reference_projection import (
     calibrate_anchor_projection,
 )
 from cnvsim.preprocess.encode import add_cnv_event_flags, compute_feature_burden
-from cnvsim.preprocess.gene_panel_store import load_gene_panel_subset_from_cache
+from cnvsim.preprocess.gene_panel_store import load_gene_panel_subset_from_store
 from cnvsim.preprocess.scaling import l2_normalize_rows
 
 
@@ -527,8 +527,8 @@ def transform_holdout_queries(
             {str(column).rsplit("__", 1)[0] for column in feature_columns}
         )
         identifiers = root_test["analysis_id"].astype(str).tolist()
-        panel = load_gene_panel_subset_from_cache(
-            cache_dir=Path(gene_panel_cache),
+        panel = load_gene_panel_subset_from_store(
+            store_dir=Path(gene_panel_cache),
             analysis_ids=identifiers,
             gene_symbols=gene_symbols,
             columns=[
