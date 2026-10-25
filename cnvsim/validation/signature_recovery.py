@@ -25,7 +25,7 @@ from cnvsim.analysis.subsampling_selection import (
 )
 from cnvsim.preprocess.encode import EVENT_COLS
 from cnvsim.preprocess.gene_panel_store import (
-    load_gene_panel_subset_from_cache,
+    load_gene_panel_subset_from_store,
 )
 from cnvsim.validation.config import SignatureRecoveryParams
 
@@ -1493,8 +1493,8 @@ def compute_heldout_target_effects(
             )
         ]
         root_gene_panel = (
-            load_gene_panel_subset_from_cache(
-                cache_dir=cache_dir,
+            load_gene_panel_subset_from_store(
+                store_dir=cache_dir,
                 analysis_ids=set(root_assignments["analysis_id"].astype(str)),
                 gene_symbols=None,
                 columns=None,

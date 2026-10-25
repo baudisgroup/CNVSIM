@@ -607,7 +607,12 @@ def segment_gene_fractions(
     segments: pd.DataFrame,
     genes: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Calculate union overlap fractions for each sample, gene and event class."""
+    """Calculate union overlap fractions with inclusive total gain/loss channels.
+
+    High-amplitude events contribute to both their high-amplitude channel and
+    the corresponding total channel, matching the frozen reference features.
+    Intervals are merged within each channel before calculating coverage.
+    """
 
     required_genes = {"gene_symbol", "chrom", "start", "end"}
     missing = sorted(required_genes - set(genes.columns))
@@ -651,6 +656,13 @@ def segment_gene_fractions(
             overlaps.setdefault(
                 (str(row.sample_id), symbol, str(row.event_column)), []
             ).append((start, end))
+            total_event = {"hldup_frac": "dup_frac", "hldel_frac": "del_frac"}.get(
+                str(row.event_column)
+            )
+            if total_event is not None:
+                overlaps.setdefault(
+                    (str(row.sample_id), symbol, total_event), []
+                ).append((start, end))
             gene_lengths[symbol] = int(gene.end) - int(gene.start)
 
     rows: dict[tuple[str, str], dict[str, object]] = {}

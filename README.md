@@ -243,11 +243,15 @@ Progenetix records with non-positive interval length (`end <= start`) are
 excluded and reported per analysis in `retrieval_audit.tsv`; the converter
 stops only when no projectable CNV segment remains for a selected analysis.
 
-### Projection smoke test
+### Projection tests
 
-The test retrieves three fixed public Progenetix analyses
-and verifies core assignment, conditional routing, unresolved handling,
-nearest-reference output:
+Run the projection unit tests from the repository root:
+
+```bash
+CNVSIM_RELEASE_DIR="$CNVSIM_DATA" python -m unittest discover -s tests -v
+```
+
+To also run the live Progenetix retrieval smoke test (retrieves three public analyses via the Beacon API and verifies core assignment, conditional routing, unresolved handling, and nearest-reference output):
 
 ```bash
 CNVSIM_DATA="$CNVSIM_DATA" \
@@ -255,7 +259,7 @@ CNVSIM_RUN_NETWORK_TESTS=1 \
 python -m unittest tests.progenetix_retrieval_example.test_projection -v
 ```
 
-The test will write to a temporary directory.
+Tests write to a temporary directory.
 
 ## Query Cellosaurus cell lines
 
@@ -296,9 +300,11 @@ distance to the matched subtype.
 | `run_scripts/project_samples.py` | Projection entry point for new CNV segments. |
 | `run_scripts/applications/` | Cell-line resource query interface. |
 | `run_scripts/analysis/` | Atlas construction and reference-projection workflows. |
-| `run_scripts/validation/` | Projection and signature-recovery validation runners. |
+| `run_scripts/validation/` | Core and conditional projection, signature-recovery, and segment-span validation runners. |
 | `run_scripts/figures/` | Runners used to produce manuscript figures. |
 | `tests/progenetix_retrieval_example/` | Public bycon retrieval example and live projection smoke test. |
+
+Projection and cell-line query tools run directly on the data release; full atlas construction, validation, and figure runners also use intermediate analysis-workspace outputs.
 
 ## Citation
 
