@@ -383,15 +383,20 @@ def extract_context_signatures(
                 ]
             )
         for frame in (marker_stats, candidates, platform_stats, stability):
-            if not frame.empty:
-                frame.rename(columns={"cluster": "context"}, inplace=True)
+            # Empty tables keep the same keys so the strict-support merge works.
+            frame.rename(columns={"cluster": "context"}, inplace=True)
+            if "root" not in frame.columns:
                 frame.insert(0, "root", str(root))
 
         chromosome_map = _gene_chromosome_map(gene_panel)
         if not marker_stats.empty:
             marker_stats = marker_stats.merge(chromosome_map, on="gene_symbol", how="left")
+        elif "chromosome" not in marker_stats.columns:
+            marker_stats["chromosome"] = pd.Series(dtype="object")
         if not candidates.empty:
             candidates = candidates.merge(chromosome_map, on="gene_symbol", how="left")
+        elif "chromosome" not in candidates.columns:
+            candidates["chromosome"] = pd.Series(dtype="object")
 
         support_columns = [
             "root",
