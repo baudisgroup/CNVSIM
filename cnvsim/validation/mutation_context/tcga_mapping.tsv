@@ -1,0 +1,10 @@
+root	diagnosis	status	mapping_class	projects	morphologies	topography_prefixes	histology_labels	note	ncit_filter	topography_include	topography_exclude
+C18_C20	COAD	mapped	exact_morphology_and_ncit_within_project	TCGA.COAD	pgx:icdom-81403	pgx:icdot-C18	Colon Adenocarcinoma	Rectosigmoid (NCIT:C43584) and mucinous 8480/3 excluded.	NCIT:C4349		
+C18_C20	READ	mapped	exact_morphology_and_ncit_within_project	TCGA.READ	pgx:icdom-81403	pgx:icdot-C20	Rectal Adenocarcinoma	Rectosigmoid (NCIT:C43584) excluded.	NCIT:C9383		
+C30_C39	LUAD	mapped	exact_morphology_within_project	TCGA.LUAD	pgx:icdom-81403	pgx:icdot-C34	Lung Adenocarcinoma				
+C50	BRCA	not_mapped	parent_or_unspecified_code					GENIE 'Invasive Breast Carcinoma' is the parent of IDC/ILC etc.			
+C50	IDC	mapped	exact_morphology_within_project	TCGA.BRCA	pgx:icdom-85003	pgx:icdot-C50	Ductal Breast Carcinoma				
+C60_C63	PRAD	mapped	exact_morphology_within_project	TCGA.PRAD	pgx:icdom-81403	pgx:icdot-C61	Prostate Adenocarcinoma	Acinar 8550/3 not included.			
+C64_C68	BLCA	mapped	exact_morphology_within_project	TCGA.BLCA	pgx:icdom-81203	pgx:icdot-C67	Bladder Urothelial Carcinoma				
+C64_C68	CCRCC	mapped	exact_morphology_within_project	TCGA.KIRC	pgx:icdom-83103	pgx:icdot-C64	Clear Cell Renal Cell Carcinoma				
+C71	GBM	pending_decision	competing_codes_one_to_many	TCGA.GBM	pgx:icdom-94403			Competing GBM/astrocytoma codes; mapping not decided.			
