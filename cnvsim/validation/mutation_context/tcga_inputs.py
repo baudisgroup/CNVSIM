@@ -11,6 +11,83 @@ MODES = ('primary_vial16_pass', 'sensitivity_vial16_pass_or_wga')
 POS, NEG, UNKNOWN = 'positive', 'no_qualifying_call', 'unknown'
 
 
+# Diagnosis rules for the fixed 45 GENIE candidates.
+DIAGNOSIS_MAPPING = {
+    ('C18_C20', 'COAD'): {
+        'root': 'C18_C20', 'diagnosis': 'COAD',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_and_ncit_within_project',
+        'projects': ['TCGA.COAD'], 'morphologies': ['pgx:icdom-81403'],
+        'topography_prefixes': ['pgx:icdot-C18'], 'histology_labels': ['Colon Adenocarcinoma'],
+        'ncit_filter': ['NCIT:C4349'], 'topography_include': [], 'topography_exclude': [],
+        'note': 'Rectosigmoid (NCIT:C43584) and mucinous 8480/3 excluded.',
+    },
+    ('C18_C20', 'READ'): {
+        'root': 'C18_C20', 'diagnosis': 'READ',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_and_ncit_within_project',
+        'projects': ['TCGA.READ'], 'morphologies': ['pgx:icdom-81403'],
+        'topography_prefixes': ['pgx:icdot-C20'], 'histology_labels': ['Rectal Adenocarcinoma'],
+        'ncit_filter': ['NCIT:C9383'], 'topography_include': [], 'topography_exclude': [],
+        'note': 'Rectosigmoid (NCIT:C43584) excluded.',
+    },
+    ('C30_C39', 'LUAD'): {
+        'root': 'C30_C39', 'diagnosis': 'LUAD',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_within_project',
+        'projects': ['TCGA.LUAD'], 'morphologies': ['pgx:icdom-81403'],
+        'topography_prefixes': ['pgx:icdot-C34'], 'histology_labels': ['Lung Adenocarcinoma'],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': '',
+    },
+    ('C50', 'BRCA'): {
+        'root': 'C50', 'diagnosis': 'BRCA',
+        'status': 'not_mapped', 'mapping_class': 'parent_or_unspecified_code',
+        'projects': [], 'morphologies': [],
+        'topography_prefixes': [], 'histology_labels': [],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': "GENIE 'Invasive Breast Carcinoma' is the parent of IDC/ILC etc.",
+    },
+    ('C50', 'IDC'): {
+        'root': 'C50', 'diagnosis': 'IDC',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_within_project',
+        'projects': ['TCGA.BRCA'], 'morphologies': ['pgx:icdom-85003'],
+        'topography_prefixes': ['pgx:icdot-C50'], 'histology_labels': ['Ductal Breast Carcinoma'],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': '',
+    },
+    ('C60_C63', 'PRAD'): {
+        'root': 'C60_C63', 'diagnosis': 'PRAD',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_within_project',
+        'projects': ['TCGA.PRAD'], 'morphologies': ['pgx:icdom-81403'],
+        'topography_prefixes': ['pgx:icdot-C61'], 'histology_labels': ['Prostate Adenocarcinoma'],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': 'Acinar 8550/3 not included.',
+    },
+    ('C64_C68', 'BLCA'): {
+        'root': 'C64_C68', 'diagnosis': 'BLCA',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_within_project',
+        'projects': ['TCGA.BLCA'], 'morphologies': ['pgx:icdom-81203'],
+        'topography_prefixes': ['pgx:icdot-C67'], 'histology_labels': ['Bladder Urothelial Carcinoma'],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': '',
+    },
+    ('C64_C68', 'CCRCC'): {
+        'root': 'C64_C68', 'diagnosis': 'CCRCC',
+        'status': 'mapped', 'mapping_class': 'exact_morphology_within_project',
+        'projects': ['TCGA.KIRC'], 'morphologies': ['pgx:icdom-83103'],
+        'topography_prefixes': ['pgx:icdot-C64'], 'histology_labels': ['Clear Cell Renal Cell Carcinoma'],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': '',
+    },
+    ('C71', 'GBM'): {
+        'root': 'C71', 'diagnosis': 'GBM',
+        'status': 'pending_decision', 'mapping_class': 'competing_codes_one_to_many',
+        'projects': ['TCGA.GBM'], 'morphologies': ['pgx:icdom-94403'],
+        'topography_prefixes': [], 'histology_labels': [],
+        'ncit_filter': [], 'topography_include': [], 'topography_exclude': [],
+        'note': 'Competing GBM/astrocytoma codes; mapping not decided.',
+    },
+}
+
+
 def unique(frame, key, source):
     if frame[key].isna().any() or frame[key].duplicated().any():
         raise ValueError(f'{source}: missing or duplicate {key}')

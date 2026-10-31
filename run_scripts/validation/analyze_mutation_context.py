@@ -2,7 +2,7 @@
 
 TCGA preparation (after GENIE analysis, before export-tables):
   tcga-prepare --run-dir GENIE_RUN --atlas-dir ATLAS --mc3-maf MC3.maf.gz
-    --tcga-barcode-map tcga_analyses.tsv [--features-dir DIR] [--tcga-rules MAP.tsv]
+    --tcga-barcode-map tcga_analyses.tsv [--features-dir DIR]
 TCGA analysis:
   tcga-analyze --run-dir GENIE_RUN
 Export GENIE and optional TCGA results together:
@@ -10,7 +10,7 @@ Export GENIE and optional TCGA results together:
 
 The barcode map supplies analysis_id, sample_id (TCGA barcode) and study_id;
 it is a local input supplied by the user and is not included in the release.
-The mapping covers the diagnoses of the fixed 45 candidates.
+DIAGNOSIS_MAPPING in tcga_inputs.py covers the diagnoses of the fixed 45 candidates.
 Four LOCAL_ONLY files go in GENIE_RUN/tcga/. Input, code and output hashes
 are stored in the existing mutation_manifest.json under tcga. Preserve the original
 GENIE run and work on a copy. The shared exporter adds one 45-row TCGA table
@@ -48,7 +48,6 @@ def main():
     parser.add_argument("--atlas-dir", type=Path, help="Released CNVSIM atlas for tcga-prepare")
     parser.add_argument("--mc3-maf", type=Path, help="Locally supplied TCGA MC3 v0.2.8 PUBLIC MAF.gz")
     parser.add_argument("--tcga-barcode-map", type=Path, help="Local TSV with analysis_id, sample_id (TCGA aliquot), study_id")
-    parser.add_argument("--tcga-rules", type=Path, help="TCGA diagnosis mapping TSV; defaults to the packaged mapping")
     args = parser.parse_args()
     args.stage = STAGE_ALIASES.get(args.stage, args.stage)
     tcga_inputs = [args.atlas_dir, args.mc3_maf, args.tcga_barcode_map]
@@ -59,13 +58,13 @@ def main():
         if args.stage == 'tcga-prepare':
             if not all(x is not None for x in tcga_inputs) or args.run_dir is None or args.out_dir is not None:
                 parser.error('tcga-prepare requires --run-dir, --atlas-dir, --mc3-maf and --tcga-barcode-map; omit --out-dir')
-            tcga.prepare(args.run_dir, *tcga_inputs, args.features_dir, args.tcga_rules)
+            tcga.prepare(args.run_dir, *tcga_inputs, args.features_dir)
         else:
-            if args.run_dir is None or args.out_dir is not None or any(x is not None for x in tcga_inputs + [args.features_dir, args.tcga_rules]):
+            if args.run_dir is None or args.out_dir is not None or any(x is not None for x in tcga_inputs + [args.features_dir]):
                 parser.error('tcga-analyze requires only --run-dir; use export-tables for aggregate output')
             tcga.analyze(args.run_dir)
         return
-    if any(x is not None for x in tcga_inputs + [args.tcga_rules]):
+    if any(x is not None for x in tcga_inputs):
         parser.error('TCGA input options apply only to tcga-prepare')
     supplied = [args.genie_maf, args.prepared_dir, args.contrasts, args.shape, args.features_dir]
     if args.stage == "check-inputs":

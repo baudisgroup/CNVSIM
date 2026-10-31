@@ -11,12 +11,11 @@ from statsmodels.stats.multitest import multipletests
 
 from . import association, manifest
 from .cache import read_jobs, write_jobs
-from .tcga_inputs import (MODES, select_participants, scan_mc3, pair_barcodes,
+from .tcga_inputs import (DIAGNOSIS_MAPPING, MODES, select_participants, scan_mc3, pair_barcodes,
                           build_states, select_comparison)
 from .table_schema import KEY
 
 
-RULES = Path(__file__).with_name('tcga_mapping.tsv')
 MC3_SHA256 = 'cb0caa0e3a80a24cc4ccaaacc95c690a4032cc87c8ac78519a5b33f3aa3f6b81'
 QUALIFYING = {'Missense_Mutation', 'Nonsense_Mutation', 'Frame_Shift_Del',
               'Frame_Shift_Ins', 'In_Frame_Del', 'In_Frame_Ins', 'Splice_Site',
@@ -56,7 +55,7 @@ def load_candidates(genie_run):
     return candidates.sort_values(KEY, kind='stable'), meta
 
 
-def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None, rules_path=None):
+def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None):
     genie = Path(genie_run).expanduser().resolve()
     run = genie / 'tcga'
     atlas = Path(atlas_dir).expanduser().resolve()
@@ -68,8 +67,7 @@ def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None, rules
              'metadata': atlas / 'source_data/source_file/metadata/tumour_analysis_metadata.parquet',
              'shape': atlas / 'source_data/source_derived/analysis_shape_proxies.parquet',
              'mc3_maf': Path(mc3_maf).expanduser().resolve(),
-             'barcode_map': Path(barcode_map).expanduser().resolve(),
-             'rules': Path(rules_path or RULES).expanduser().resolve()}
+             'barcode_map': Path(barcode_map).expanduser().resolve()}
     for root in sorted(focus.root.unique()):
         files['features_' + root] = features / f'{root}_features.parquet'
     for path in files.values():
@@ -77,21 +75,7 @@ def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None, rules
             raise FileNotFoundError(path)
         if run == path or run in path.parents or path in run.parents:
             raise ValueError('TCGA run directory overlaps an input')
-    rules = pd.read_csv(files['rules'], sep='\t', dtype=str).fillna('')
-    required = {'root', 'diagnosis', 'status', 'mapping_class', 'projects', 'morphologies',
-                'topography_prefixes', 'histology_labels', 'ncit_filter', 'topography_include', 'topography_exclude'}
-    if not required <= set(rules) or rules.duplicated(['root', 'diagnosis']).any():
-        raise ValueError('Incomplete or duplicate TCGA diagnosis mapping')
-    mapping = {}
-    for r in rules.to_dict('records'):
-        if r['status'] not in ('mapped', 'not_mapped', 'pending_decision'):
-            raise ValueError('Unknown mapping status')
-        for k in ('projects', 'morphologies', 'topography_prefixes', 'histology_labels',
-                  'ncit_filter', 'topography_include', 'topography_exclude'):
-            r[k] = [s for s in r[k].split(';') if s]
-        if r['status'] == 'mapped' and (not r['projects'] or not r['morphologies']):
-            raise ValueError('Mapped diagnosis lacks project or morphology')
-        mapping[(r['root'], r['diagnosis'])] = r
+    mapping = DIAGNOSIS_MAPPING
     if not set(zip(focus.root, focus.diagnosis)) <= set(mapping):
         raise ValueError('A candidate diagnosis has no explicit mapping decision')
     with manifest.exclusive_run(genie):
