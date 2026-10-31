@@ -18,10 +18,11 @@ from statsmodels.stats.multitest import multipletests
 
 from . import statistics as stats
 from .cache import read_jobs, write_jobs
+from .manifest import save_record, load_record, has_record
 
 exact = stats.fast_two_by_two_exact_and_cmh
 STAT_PATH = Path(stats.__file__)
-HERE = FEATURES = RAW = SAMPLES = COVERAGE = ANALYSIS_CONFIG = CONTRASTS = SHAPE = PROTOCOL = None
+HERE = FEATURES = RAW = SAMPLES = COVERAGE = ANALYSIS_CONFIG = CONTRASTS = SHAPE = None
 
 
 def digest(path):
@@ -32,10 +33,6 @@ def digest(path):
     return h.hexdigest()
 
 
-def save_json(path, obj):
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
-
-
 def inputs():
     files = {
         'samples': SAMPLES,
@@ -44,7 +41,7 @@ def inputs():
         'contrasts': CONTRASTS,
         'shape': SHAPE,
         'raw_maf': RAW, 'statistics_code': STAT_PATH,
-        'protocol': PROTOCOL, 'runner': Path(__file__),
+        'runner': Path(__file__),
     }
     for root in sorted(pd.read_parquet(files['contrasts'], columns=['root']).root.unique()):
         files['features_' + root] = FEATURES / f'{root}_features.parquet'
@@ -52,11 +49,11 @@ def inputs():
 
 
 def prepare():
-    if (HERE / 'PREPARED.json').exists():
+    if has_record(HERE, 'PREPARED'):
         raise FileExistsError('prepared inputs already exist')
     paths = inputs()
     hashes = {k: digest(p) for k, p in paths.items()}
-    save_json(HERE / 'INPUT_HASHES.json', {'sha256': hashes})
+    save_record(HERE, 'INPUT_HASHES', {'sha256': hashes})
     cfg = json.loads(paths['config'].read_text())
     w = pd.read_parquet(paths['contrasts'])
     assert len(w) == 9582
@@ -134,8 +131,8 @@ def prepare():
     assert sum(len(j['rows']) for j in jobs) == len(w)
     write_jobs(HERE / 'LOCAL_ONLY_jobs.zip', jobs)
     pd.DataFrame(audit).to_csv(HERE / 'cohort_reconstruction_audit.tsv', sep='\t', index=False)
-    save_json(HERE / 'PREPARED.json', {'utc': datetime.now(timezone.utc).isoformat(),
-              'protocol_sha256': hashes['protocol'], 'input_sha256': hashes,
+    save_record(HERE, 'PREPARED', {'utc': datetime.now(timezone.utc).isoformat(),
+              'input_sha256': hashes,
               'jobs_sha256': digest(HERE / 'LOCAL_ONLY_jobs.zip'), 'groups': len(jobs),
               'contrasts_reproduced': len(w), 'raw_maf_rows_read': raw_rows,
               'statistics_refitted_so_far': False})
@@ -336,14 +333,13 @@ def summarize(frame):
                'old_panel_significant_512': counts(out[out.assay_exact_score_q_declared.lt(.05)]),
                'old_fga_retained_71': counts(out[out.fga_stratification_status.eq('retained_after_fga_stratification')]),
                'by_old_status': {k: counts(g) for k, g in out.groupby('fga_stratification_status')},
-               'interpretation': 'Exploratory conditional association, not causal, predictive or independent source validation.',
-               'protocol_sha256': digest(PROTOCOL)}
-    save_json(HERE / 'SUMMARY.json', summary)
+               'interpretation': 'Exploratory conditional association, not causal, predictive or independent source validation.'}
+    save_record(HERE, 'SUMMARY', summary)
     return summary
 
 
 def analyze(workers):
-    manifest = json.loads((HERE / 'PREPARED.json').read_text())
+    manifest = load_record(HERE, 'PREPARED')
     for k, p in inputs().items():
         if digest(p) != manifest['input_sha256'][k]:
             raise ValueError('changed input: '+k)
@@ -360,8 +356,8 @@ def analyze(workers):
     df = pd.DataFrame(records)
     assert len(df) == 9582 and df.frozen_p_reproduced.all()
     summary = summarize(df)
-    save_json(HERE / 'COMPLETE.json', {'utc': datetime.now(timezone.utc).isoformat(),
-              'protocol_sha256': manifest['protocol_sha256'], 'input_sha256': manifest['input_sha256'],
+    save_record(HERE, 'COMPLETE', {'utc': datetime.now(timezone.utc).isoformat(),
+              'input_sha256': manifest['input_sha256'],
               'results_sha256': digest(HERE / 'conditional_associations.parquet'),
               'reproduced_all_frozen_counts_and_p_values': True})
     print(json.dumps({k: summary[k] for k in ('all', 'old_fga_retained_71')}, indent=2), flush=True)

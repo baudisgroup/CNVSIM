@@ -7,6 +7,8 @@ import re
 import numpy as np
 import pandas as pd
 
+from . import manifest as run_manifest
+
 KEY = ["root", "ONCOTREE_CODE", "gene", "subtype"]
 CHECKS = ["matched_baseline", "density_only", "type_only", "combined", "amplitude", "quadratic", "restricted"]
 STATUS_ORDER = ["supported_across_context_checks", "supported_with_unestimable_sensitivity",
@@ -103,19 +105,23 @@ def export_tables(run_dir, out_dir):
         raise ValueError("Export directory must be separate from the analysis run")
     if out.exists():
         raise FileExistsError("Use a new export directory; existing exports are preserved")
+    run_manifest.verify_outputs(run)
+    run_record = run_manifest.read(run)
     for stage in ["local-prepare", "local-analyze", "center", "context", "variants"]:
         folder = "local_cnv" if stage.startswith("local-") else stage
-        record = json.loads((run / folder / (stage + "_STATUS.json")).read_text())
+        record = run_record["stages"].get(stage, {})
         if record.get("status") != "COMPLETE":
             raise ValueError(f"Stage {stage} is not complete")
     frames, hashes = {}, {}
     for rel in AGGREGATES:
         p = run / rel
         hashes[rel] = digest(p)
+        if hashes[rel] != run_record["output_sha256"].get(rel):
+            raise ValueError(f"Aggregate output is changed or unrecorded: {rel}")
         frames[rel] = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p, sep="\t", float_precision="round_trip")
         ensure_aggregate(frames[rel])
     for folder, name in [("local_cnv", "conditional_associations"), ("center", "CENTER_RESULTS"), ("context", "CONTEXT_RESULTS")]:
-        complete = json.loads((run / folder / "COMPLETE.json").read_text())
+        complete = run_manifest.load_record(run / folder, "COMPLETE")
         if hashes[f"{folder}/{name}.parquet"] != complete["results_sha256"]:
             raise ValueError(f"Completed result checksum changed: {folder}")
     center_all = frames["center/CENTER_RESULTS.parquet"]
@@ -134,11 +140,11 @@ def export_tables(run_dir, out_dir):
         frame.to_csv(dest, sep="\t", index=False)
         inventory.append({"path": dest.relative_to(out).as_posix(), "rows": len(frame),
                           "columns": {c: str(frame[c].dtype) for c in frame}, "sha256": digest(dest),
-                          "source": rel if rel in frames else "Derived from frozen aggregate columns; see exporter and README.txt",
+                          "source": rel if rel in frames else "Derived from frozen aggregate columns; see exporter and README.md",
                           "release_status": "candidate_pending_release_review"})
     if any(digest(run / rel) != sha for rel, sha in hashes.items()):
         raise RuntimeError("Input changed during export; do not use this export")
-    (out / "README.txt").write_text(
+    (out / "README.md").write_text(
         "Mutation-context aggregate release candidate\n\n"
         "Start with reader/FOCUS_45_OVERVIEW.tsv. The same tables can supply the versioned data release and manuscript supplement; do not recompute results for each.\n"
         "The unit is one root/diagnosis/gene/subtype comparison, not one patient. subtype_pos/subtype_n and other_subtypes_pos/other_subtypes_n are unadjusted counts.\n"
@@ -150,8 +156,10 @@ def export_tables(run_dir, out_dir):
         "Variants: frozen_evaluable and combined_informative are distinct populations; carriers and variant_observations are different denominators. Category carrier counts can overlap. No variant tests are fitted.\n"
         "PROTEIN_CHANGE_COUNTS and POSITION_COUNTS contain rare aggregate cells, including counts of one. All files are publication candidates subject to the same release review, whether supplied as a data package or journal supplement.\n"
         "No raw MAF, sample linkage, individual records, job cache or local-path configuration is included. selected_local_state_descriptive_counts and the local TCGA follow-up are not exported.\n"
-        "Methods and protocol provenance are in the matching code version, configs/mutation_context_protocols/. Exporting does not authorize redistribution or create a public release.\n")
+        "Methods accompany the versioned data release; operational rules are in the matching analysis code. Checksums and export inventory are recorded in the run-level mutation_manifest.json. Exporting does not authorize redistribution or create a public release.\n")
     manifest = {"status": "AGGREGATE_EXPORT_COMPLETE_NOT_PUBLISHED", "statistics_refitted": False,
                 "input_sha256": hashes, "exporter_sha256": digest(__file__), "files": inventory}
-    (out / "EXPORT_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    data = run_manifest.read(run)
+    data["exports"] = {"output_dir": str(out), **manifest}
+    run_manifest.write(run, data)
     print(json.dumps({"status": manifest["status"], "tables": len(inventory), "output_dir": str(out)}, indent=2))

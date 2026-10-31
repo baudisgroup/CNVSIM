@@ -10,7 +10,7 @@ import pandas as pd
 from . import context as c
 h = c.h
 from .cache import read_jobs, write_jobs
-HERE = PRIOR = PROTOCOL = None
+HERE = PRIOR = None
 FASTA_DIR = None
 CASES=[('C50','IDC','C50-CTX4','ESR1'),('C50','IDC','C50-CTX4','GATA3'),('C18_C20','COAD','C18_C20-CTX10','EP300')]
 REF={'ESR1':('P03372','ENST00000206249',595,311,547),'GATA3':('P23771','ENST00000346208',443,317,341),'EP300':('Q09472','ENST00000263253',2414,1287,1663)}
@@ -97,20 +97,20 @@ def parser_checks(seqs):
     test('EP300','Missense_Mutation','p.D1399N','HAT_missense')
 
 def main(refresh=False):
-    # Original classification rules are shipped as a versioned protocol.
+    # Classification rules are versioned in this module; methods accompany the data release.
     # This reproduction does not claim a new prospective protocol freeze.
     paths={'jobs':PRIOR/'LOCAL_ONLY_jobs.zip','context_results':PRIOR/'CONTEXT_RESULTS.parquet',
            'prior_code':Path(c.__file__),'local_cnv_code':Path(h.__file__),
-           'raw_maf':h.RAW,'config':h.ANALYSIS_CONFIG,'protocol':PROTOCOL,'script':Path(__file__)}
+           'raw_maf':h.RAW,'config':h.ANALYSIS_CONFIG,'script':Path(__file__)}
     paths.update({g+'_fasta':FASTA_DIR/f'{v[0]}.fasta' for g,v in REF.items()})
     hashes={k:h.digest(p) for k,p in paths.items()}
-    old=json.loads((PRIOR/'INPUT_HASHES.json').read_text())['sha256']
-    prepared=json.loads((PRIOR/'PREPARED.json').read_text())
+    old=h.load_record(PRIOR, 'INPUT_HASHES')['sha256']
+    prepared=h.load_record(PRIOR, 'PREPARED')
     assert hashes['jobs']==prepared['jobs_sha256']
     for k in ['raw_maf','config']:assert hashes[k]==old[k],k
     assert hashes['prior_code']==old['code']
     assert hashes['local_cnv_code']==old['prior_code']
-    h.save_json(HERE/'INPUT_HASHES.json',{'sha256':hashes,'utc':datetime.now(timezone.utc).isoformat()})
+    h.save_record(HERE, 'INPUT_HASHES',{'sha256':hashes,'utc':datetime.now(timezone.utc).isoformat()})
     seqs={g:''.join(paths[g+'_fasta'].read_text().splitlines()[1:]) for g in REF}
     for g,seq in seqs.items():assert len(seq)==REF[g][2]
     parser_checks(seqs)
@@ -188,9 +188,9 @@ def main(refresh=False):
         assert not any(col in table for col in ['sample_id','analysis_id','Tumor_Sample_Barcode'])
     pd.concat(local_frames,ignore_index=True).to_parquet(HERE/'LOCAL_ONLY_annotated_variants.parquet',index=False)
     pd.concat(sample_frames,ignore_index=True).to_parquet(HERE/'LOCAL_ONLY_cohort_members.parquet',index=False)
-    h.save_json(HERE/'AUDIT.json',{'created_utc':datetime.now(timezone.utc).isoformat(),'cases':audit,
+    h.save_record(HERE, 'AUDIT',{'created_utc':datetime.now(timezone.utc).isoformat(),'cases':audit,
           'all_frozen_denominators_and_positives_reproduced':True,'combined_information_masks_reproduced':True,
-          'new_statistical_tests':0,'raw_extract_sha256':h.digest(raw_path),'protocol_sha256':hashes['protocol'],
+          'new_statistical_tests':0,'raw_extract_sha256':h.digest(raw_path),
           'source_raw_maf_sha256':hashes['raw_maf'],'sources_refreshed_from_raw_maf':refresh})
     print(pd.DataFrame(cohort_rows).query("population=='combined_informative'")[['gene','group','evaluable_samples','mutation_carriers','variant_observations']].to_string(index=False))
     print('COMPLETE: frozen counts and conditional information sets reproduced; no new tests')

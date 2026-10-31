@@ -14,7 +14,7 @@ from statsmodels.stats.multitest import multipletests
 
 from . import local_cnv as h
 from .cache import read_jobs, write_jobs
-HERE = PRIOR = PROTOCOL = None
+HERE = PRIOR = None
 KEY=['root','ONCOTREE_CODE','gene','subtype']
 NAMES=['matched_baseline','density_only','type_only','combined','amplitude','quadratic','restricted']
 
@@ -113,13 +113,13 @@ def prepare():
     paths={'jobs':PRIOR/'LOCAL_ONLY_jobs.zip','pooled':PRIOR/'conditional_associations.parquet','prior_code':Path(h.__file__),
            'samples':h.SAMPLES,'coverage':h.COVERAGE,
            'config':h.ANALYSIS_CONFIG,'raw_maf':h.RAW,'statistics_code':h.STAT_PATH,
-           'protocol':PROTOCOL,'code':Path(__file__)}
-    hashes={k:h.digest(v) for k,v in paths.items()};prior=json.loads((PRIOR/'PREPARED.json').read_text())
+           'code':Path(__file__)}
+    hashes={k:h.digest(v) for k,v in paths.items()};prior=h.load_record(PRIOR, 'PREPARED')
     assert hashes['jobs']==prior['jobs_sha256']
     for k in ['samples','coverage','config','raw_maf','statistics_code']:
         assert hashes[k]==prior['input_sha256'][k],k
     assert hashes['prior_code']==prior['input_sha256']['runner']
-    h.save_json(HERE/'INPUT_HASHES.json',{'sha256':hashes,'utc':datetime.now(timezone.utc).isoformat()})
+    h.save_record(HERE, 'INPUT_HASHES',{'sha256':hashes,'utc':datetime.now(timezone.utc).isoformat()})
     cfg=json.loads(paths['config'].read_text());gs=pd.read_parquet(paths['samples'])
     gs=gs[gs.selected_patient_root&gs.reference_layer.eq('core')];assert gs.analysis_id.is_unique and gs.sample_id.is_unique
     meta=gs.set_index('analysis_id');keep=set(gs.sample_id)
@@ -154,11 +154,11 @@ def prepare():
         unique.append(z[['analysis_id','SAMPLE_TYPE','SAMPLE_TYPE_DETAILED','full_reported_density','assay_exonic_mb']])
     u=pd.concat(unique).drop_duplicates('analysis_id')
     u.groupby(['SAMPLE_TYPE','SAMPLE_TYPE_DETAILED'],dropna=False).size().rename('unique_analyses').reset_index().to_csv(HERE/'sample_type_coverage.tsv',sep='\t',index=False)
-    h.save_json(HERE/'PREPARED.json',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':len(v),'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'input_sha256':hashes,'protocol_sha256':hashes['protocol'],'inference_not_started':True})
+    h.save_record(HERE, 'PREPARED',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':len(v),'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'input_sha256':hashes,'inference_not_started':True})
     write_jobs(HERE/'LOCAL_ONLY_jobs.zip', jobs)
-    prepared = json.loads((HERE/'PREPARED.json').read_text())
+    prepared = h.load_record(HERE, 'PREPARED')
     prepared['jobs_sha256'] = h.digest(HERE/'LOCAL_ONLY_jobs.zip')
-    h.save_json(HERE/'PREPARED.json', prepared)
+    h.save_record(HERE, 'PREPARED', prepared)
     print('PREPARED all9582; target-gene positivity reproduced',flush=True)
     return jobs,paths,hashes
 
@@ -188,7 +188,7 @@ def summarize(df):
     for name,g in [('prior45',focus),('all_supported',df[df.context_status.eq('supported_across_context_checks')]),('prior45_supported',focus[focus.context_status.eq('supported_across_context_checks')])]:
         summary[name+'_pan_cancer']={'comparisons':len(g),'subtypes':int(g.subtype.nunique()),'roots':int(g.root.nunique()),'genes':int(g.gene.nunique()),'root_counts':g.root.value_counts().to_dict(),'TP53_comparisons':int(g.gene.eq('TP53').sum())}
         g.groupby('gene').agg(comparisons=('root','size'),roots=('root','nunique'),root_list=('root',lambda x:','.join(sorted(set(x)))),subtypes=('subtype','nunique')).sort_values(['roots','comparisons'],ascending=False).to_csv(HERE/(name+'_gene_root_summary.tsv'),sep='\t')
-    h.save_json(HERE/'SUMMARY.json',summary)
+    h.save_record(HERE, 'SUMMARY',summary)
     return summary
 
 
@@ -202,5 +202,5 @@ def run(workers):
     df=pd.DataFrame(rows);assert len(df)==9582 and int(df.pooled_robust.sum())==45
     summary=summarize(df)
     assert hashes=={k:h.digest(p) for k,p in paths.items()}
-    h.save_json(HERE/'COMPLETE.json',{'utc':datetime.now(timezone.utc).isoformat(),'input_sha256':hashes,'inputs_unchanged':True,'results_sha256':h.digest(HERE/'CONTEXT_RESULTS.parquet')})
+    h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'input_sha256':hashes,'inputs_unchanged':True,'results_sha256':h.digest(HERE/'CONTEXT_RESULTS.parquet')})
     print(json.dumps({'prior45':summary['prior45'],'prior45_supported_pan_cancer':summary['prior45_supported_pan_cancer']},indent=2),flush=True)

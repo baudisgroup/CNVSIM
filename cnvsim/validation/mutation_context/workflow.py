@@ -1,42 +1,26 @@
-"""Explicit inputs for the frozen 9,582-comparison GENIE reproduction."""
+"""CLI input preparation and staged analysis with one local manifest."""
 from datetime import datetime, timezone
+import importlib.metadata
 import json
 from pathlib import Path
+import sys
 
 import pandas as pd
 import pyarrow.parquet as pq
 
-from . import local_cnv, center, context, variants
-
-INPUT_KEYS = {"genie_maf", "genie_samples", "assay_coverage", "analysis_config", "contrasts", "shape", "features_dir", "protein_fasta_dir", "output_dir"}
-ROOT = Path(__file__).resolve().parents[3]
-PROTOCOL_DIR = ROOT / "configs/mutation_context_protocols"
+from . import local_cnv, center, context, variants, manifest
 
 
-def configure(path):
-    """Resolve paths relative to the JSON file, never to a developer workspace."""
-    path = Path(path).expanduser().resolve()
-    values = json.loads(path.read_text())
-    if set(values) != INPUT_KEYS:
-        raise ValueError(f"Input keys: missing={sorted(INPUT_KEYS-set(values))}, unexpected={sorted(set(values)-INPUT_KEYS)}")
-    files = {}
-    for key, value in values.items():
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"Expected a nonempty path for {key}")
-        p = Path(value).expanduser()
-        files[key] = (path.parent / p).resolve() if not p.is_absolute() else p.resolve()
+def configure(files):
+    files = {key: Path(value).expanduser().resolve() for key, value in files.items()}
     out = files["output_dir"]
-    for key, p in files.items():
-        if key == "output_dir":
-            continue
-        if out == p or out in p.parents or p in out.parents:
-            raise ValueError(f"Output must be separate from input {key}")
-    local_cnv.HERE = out / "local_cnv"
+    for key, path in files.items():
+        if key != "output_dir" and (out == path or out in path.parents or path in out.parents):
+            raise ValueError(f"Output overlaps input {key}")
     for attr, key in {"RAW": "genie_maf", "SAMPLES": "genie_samples", "COVERAGE": "assay_coverage", "ANALYSIS_CONFIG": "analysis_config", "CONTRASTS": "contrasts", "SHAPE": "shape", "FEATURES": "features_dir"}.items():
         setattr(local_cnv, attr, files[key])
     for name, mod in [("local_cnv", local_cnv), ("center", center), ("context", context), ("variants", variants)]:
         mod.HERE = out / name
-        mod.PROTOCOL = PROTOCOL_DIR / (name + ".txt")
     center.PRIOR = context.PRIOR = local_cnv.HERE
     variants.PRIOR = context.HERE
     variants.FASTA_DIR = files["protein_fasta_dir"]
@@ -77,60 +61,80 @@ def check_inputs(files):
 
 
 def _code_hashes():
-    return {p.name: local_cnv.digest(p) for p in sorted(Path(__file__).parent.glob("*.py"))} | {
-        "protocol/" + p.name: local_cnv.digest(p) for p in sorted(PROTOCOL_DIR.glob("*.txt"))
-    }
+    root = Path(__file__).resolve().parents[3]
+    paths = list(Path(__file__).parent.glob("*.py")) + [root / "run_scripts/validation/analyze_mutation_context.py"]
+    return {p.relative_to(root).as_posix(): manifest.digest(p) for p in sorted(paths)}
 
 
-def execute(stage, inputs, workers=2):
-    if workers < 1:
-        raise ValueError("workers must be positive")
-    files = configure(inputs)
+def _environment():
+    return {"python": sys.version.split()[0], **{name: importlib.metadata.version(name) for name in ["numpy", "pandas", "pyarrow", "scipy", "statsmodels", "PyYAML"]}}
+
+
+def initialize(files):
+    files = configure(files)
     check = check_inputs(files)
-    if stage == "check-inputs":
-        print(json.dumps(check, indent=2))
-        return
     out = files["output_dir"]
     out.mkdir(parents=True, exist_ok=True)
-    config_hash = local_cnv.digest(inputs)
-    code_hashes = _code_hashes()
-    lock = out / "LOCAL_ONLY_REPRODUCTION_LOCK.json"
-    binding = {"input_config_sha256": config_hash, "code_sha256": code_hashes}
-    if lock.exists():
-        if json.loads(lock.read_text()) != binding:
-            raise ValueError("Code/config changed since this reproduction started; use a new output directory")
-    else:
-        if any(out.iterdir()):
-            raise FileExistsError("Output directory must be empty for a new reproduction")
-        with lock.open("x") as f:
-            json.dump(binding, f, indent=2)
-        lock.chmod(0o600)
-    stage_dir = out / ("local_cnv" if stage.startswith("local-") else stage)
-    if stage == "local-analyze":
-        if not (stage_dir / "PREPARED.json").exists():
-            raise FileNotFoundError("Run local-prepare first")
-    else:
-        stage_dir.mkdir(exist_ok=False)
-    status_path = stage_dir / (stage + "_STATUS.json")
-    if status_path.exists():
-        raise FileExistsError("Stage has already been attempted; preserve its audit and use a fresh run")
-    local_cnv.save_json(status_path, {"status": "RUNNING", "stage": stage})
-    try:
-        if stage == "local-prepare":
-            local_cnv.prepare()
-        elif stage == "local-analyze":
-            local_cnv.analyze(workers)
-        elif stage == "center":
-            center.run(workers)
-        elif stage == "context":
-            context.run(workers)
-        elif stage == "variants":
-            variants.main(refresh=True)
-        else:
-            raise ValueError(stage)
-        if _code_hashes() != code_hashes or local_cnv.digest(inputs) != config_hash:
-            raise RuntimeError("Code or input configuration changed during the stage")
-    except Exception as exc:
-        local_cnv.save_json(status_path, {"status": "FAILED", "stage": stage, "error": str(exc)})
-        raise
-    local_cnv.save_json(status_path, {"status": "COMPLETE", "stage": stage, "utc": datetime.now(timezone.utc).isoformat()})
+    if any(out.iterdir()):
+        raise FileExistsError("Initialization needs an empty output directory")
+    with manifest.exclusive_run(out):
+        if any(p.name != ".mutation.lock" for p in out.iterdir()):
+            raise FileExistsError("Run was initialized by another process")
+        data = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
+                "inputs": {k: str(v) for k, v in files.items()}, "code_sha256": _code_hashes(),
+                "environment": _environment(), "stages": {"check-inputs": {"status": "COMPLETE", "check": check}},
+                "records": {}, "output_sha256": {}, "exports": {}}
+        manifest.write(out, data)
+    print(json.dumps({**check, "manifest": str(out / manifest.NAME)}, indent=2))
+
+
+def execute(stage, run_dir, workers=2, export_dir=None):
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    run = Path(run_dir).expanduser().resolve()
+    with manifest.exclusive_run(run):
+        data = manifest.read(run)
+        if _code_hashes() != data["code_sha256"] or _environment() != data["environment"]:
+            raise ValueError("Code or environment changed; use a fresh run and preserve the old record")
+        if any(x["status"] == "RUNNING" for x in data["stages"].values()):
+            raise RuntimeError("An earlier stage is still marked RUNNING; inspect it before proceeding")
+        if stage in data["stages"]:
+            raise FileExistsError("Stage already attempted; preserve its record and use a fresh run")
+        dependencies = {"local-prepare": ["check-inputs"], "local-analyze": ["local-prepare"],
+                        "center": ["local-analyze"], "context": ["local-analyze"], "variants": ["context"],
+                        "export-tables": ["local-analyze", "center", "context", "variants"]}
+        for required in dependencies[stage]:
+            if data["stages"].get(required, {}).get("status") != "COMPLETE":
+                raise ValueError(f"Complete {required} first")
+        manifest.verify_outputs(run)
+        files = configure(data["inputs"])
+        if files["output_dir"] != run:
+            raise ValueError("Run directory differs from its manifest")
+        if stage != "export-tables":
+            check_inputs(files)
+            folder = run / ("local_cnv" if stage.startswith("local-") else stage)
+            if stage != "local-analyze":
+                folder.mkdir(exist_ok=False)
+        manifest.set_stage(run, stage, "RUNNING")
+        try:
+            if stage == "local-prepare":
+                local_cnv.prepare()
+            elif stage == "local-analyze":
+                local_cnv.analyze(workers)
+            elif stage == "center":
+                center.run(workers)
+            elif stage == "context":
+                context.run(workers)
+            elif stage == "variants":
+                variants.main(refresh=True)
+            elif stage == "export-tables":
+                from .export import export_tables
+                export_tables(run, export_dir)
+            if _code_hashes() != data["code_sha256"] or _environment() != data["environment"]:
+                raise RuntimeError("Code or environment changed during the stage")
+            if stage != "export-tables":
+                manifest.record_outputs(run, folder)
+        except Exception as exc:
+            manifest.set_stage(run, stage, "FAILED", error=str(exc))
+            raise
+        manifest.set_stage(run, stage, "COMPLETE")
