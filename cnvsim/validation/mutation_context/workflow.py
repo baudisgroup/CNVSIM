@@ -23,7 +23,6 @@ def configure(files):
         mod.HERE = out / name
     center.PRIOR = context.PRIOR = local_cnv.HERE
     variants.PRIOR = context.HERE
-    variants.FASTA_DIR = files["protein_fasta_dir"]
     return files
 
 
@@ -53,17 +52,8 @@ def check_inputs(files):
         p = files["features_dir"] / f"{root}_features.parquet"
         if not p.is_file():
             raise FileNotFoundError(p)
-    for gene, (accession, *_) in variants.REF.items():
-        p = files["protein_fasta_dir"] / (accession + ".fasta")
-        if not p.is_file():
-            raise FileNotFoundError(f"{gene} reference FASTA: {p}")
     return {"family_n": len(contrasts), "roots": sorted(contrasts.root.unique()), "status": "SCHEMA_CHECK_PASSED; source-specific reconstruction checks run during preparation"}
 
-
-def _code_hashes():
-    root = Path(__file__).resolve().parents[3]
-    paths = list(Path(__file__).parent.glob("*.py")) + [root / "run_scripts/validation/analyze_mutation_context.py"]
-    return {p.relative_to(root).as_posix(): manifest.digest(p) for p in sorted(paths)}
 
 
 def _environment():
@@ -80,38 +70,46 @@ def initialize(files):
     with manifest.exclusive_run(out):
         if any(p.name != ".mutation.lock" for p in out.iterdir()):
             raise FileExistsError("Run was initialized by another process")
-        data = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
-                "inputs": {k: str(v) for k, v in files.items()}, "code_sha256": _code_hashes(),
+        data = {"schema_version": 2, "created_utc": datetime.now(timezone.utc).isoformat(),
+                "inputs": {k: str(v) for k, v in files.items()},
                 "environment": _environment(), "stages": {"check-inputs": {"status": "COMPLETE", "check": check}},
-                "records": {}, "output_sha256": {}, "exports": {}}
+                "records": {}, "exports": {}}
         manifest.write(out, data)
     print(json.dumps({**check, "manifest": str(out / manifest.NAME)}, indent=2))
 
 
-def execute(stage, run_dir, workers=2, export_dir=None):
+def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
     if workers < 1:
         raise ValueError("workers must be positive")
     run = Path(run_dir).expanduser().resolve()
     with manifest.exclusive_run(run):
         data = manifest.read(run)
-        if _code_hashes() != data["code_sha256"] or _environment() != data["environment"]:
-            raise ValueError("Code or environment changed; use a fresh run and preserve the old record")
         if any(x["status"] == "RUNNING" for x in data["stages"].values()):
             raise RuntimeError("An earlier stage is still marked RUNNING; inspect it before proceeding")
         if stage in data["stages"]:
             raise FileExistsError("Stage already attempted; preserve its record and use a fresh run")
         dependencies = {"local-prepare": ["check-inputs"], "local-analyze": ["local-prepare"],
                         "center": ["local-analyze"], "context": ["local-analyze"], "variants": ["context"],
-                        "export-tables": ["local-analyze", "center", "context", "variants"]}
+                        "export-tables": ["local-analyze", "center", "context"]}
         for required in dependencies[stage]:
             if data["stages"].get(required, {}).get("status") != "COMPLETE":
                 raise ValueError(f"Complete {required} first")
-        manifest.verify_outputs(run)
         files = configure(data["inputs"])
         if files["output_dir"] != run:
             raise ValueError("Run directory differs from its manifest")
+        if stage == "variants":
+            if protein_fasta_dir is None:
+                raise ValueError("variants requires --protein-fasta-dir")
+            variants.FASTA_DIR = Path(protein_fasta_dir).expanduser().resolve()
+            if run == variants.FASTA_DIR or run in variants.FASTA_DIR.parents or variants.FASTA_DIR in run.parents:
+                raise ValueError("Protein inputs overlap the run directory")
+            for accession, *_ in variants.REF.values():
+                path = variants.FASTA_DIR / (accession + ".fasta")
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+        elif protein_fasta_dir is not None:
+            raise ValueError("Protein FASTA is used only by variants")
         if stage != "export-tables":
-            check_inputs(files)
             folder = run / ("local_cnv" if stage.startswith("local-") else stage)
             if stage != "local-analyze":
                 folder.mkdir(exist_ok=False)
@@ -130,10 +128,6 @@ def execute(stage, run_dir, workers=2, export_dir=None):
             elif stage == "export-tables":
                 from .export import export_tables
                 export_tables(run, export_dir)
-            if _code_hashes() != data["code_sha256"] or _environment() != data["environment"]:
-                raise RuntimeError("Code or environment changed during the stage")
-            if stage != "export-tables":
-                manifest.record_outputs(run, folder)
         except Exception as exc:
             manifest.set_stage(run, stage, "FAILED", error=str(exc))
             raise

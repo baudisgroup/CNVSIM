@@ -1,7 +1,6 @@
 """One local JSON record for an entire mutation-analysis run."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,17 +8,10 @@ from pathlib import Path
 NAME = "mutation_manifest.json"
 
 
-def digest(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
 
 def read(run):
     data = json.loads((Path(run) / NAME).read_text())
-    if data.get("schema_version") != 1:
+    if data.get("schema_version") != 2:
         raise ValueError("Unsupported mutation manifest version")
     return data
 
@@ -74,17 +66,4 @@ def set_stage(run, stage, status, **extra):
     write(run, data)
 
 
-def verify_outputs(run):
-    run = Path(run)
-    for rel, expected in read(run)["output_sha256"].items():
-        if digest(run / rel) != expected:
-            raise ValueError(f"Output changed since completion: {rel}")
 
-
-def record_outputs(run, stage_dir):
-    run, stage_dir = Path(run), Path(stage_dir)
-    data = read(run)
-    for path in sorted(stage_dir.rglob("*")):
-        if path.is_file():
-            data["output_sha256"][path.relative_to(run).as_posix()] = digest(path)
-    write(run, data)

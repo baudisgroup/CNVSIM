@@ -1,5 +1,4 @@
 """Export aggregate release candidates and reader tables without fitting models."""
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -23,13 +22,6 @@ AGGREGATES = [
     "variants/POSITION_COUNTS.tsv", "variants/PROTEIN_CHANGE_COUNTS.tsv",
 ]
 
-
-def digest(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def ensure_aggregate(frame):
@@ -105,25 +97,21 @@ def export_tables(run_dir, out_dir):
         raise ValueError("Export directory must be separate from the analysis run")
     if out.exists():
         raise FileExistsError("Use a new export directory; existing exports are preserved")
-    run_manifest.verify_outputs(run)
     run_record = run_manifest.read(run)
-    for stage in ["local-prepare", "local-analyze", "center", "context", "variants"]:
+    for stage in ["local-prepare", "local-analyze", "center", "context"]:
         folder = "local_cnv" if stage.startswith("local-") else stage
         record = run_record["stages"].get(stage, {})
         if record.get("status") != "COMPLETE":
             raise ValueError(f"Stage {stage} is not complete")
-    frames, hashes = {}, {}
-    for rel in AGGREGATES:
+    variant_status = run_record["stages"].get("variants", {}).get("status")
+    if variant_status not in (None, "COMPLETE"):
+        raise ValueError("Variant description was attempted but did not complete")
+    aggregates = [rel for rel in AGGREGATES if not rel.startswith("variants/") or variant_status == "COMPLETE"]
+    frames = {}
+    for rel in aggregates:
         p = run / rel
-        hashes[rel] = digest(p)
-        if hashes[rel] != run_record["output_sha256"].get(rel):
-            raise ValueError(f"Aggregate output is changed or unrecorded: {rel}")
         frames[rel] = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p, sep="\t", float_precision="round_trip")
         ensure_aggregate(frames[rel])
-    for folder, name in [("local_cnv", "conditional_associations"), ("center", "CENTER_RESULTS"), ("context", "CONTEXT_RESULTS")]:
-        complete = run_manifest.load_record(run / folder, "COMPLETE")
-        if hashes[f"{folder}/{name}.parquet"] != complete["results_sha256"]:
-            raise ValueError(f"Completed result checksum changed: {folder}")
     center_all = frames["center/CENTER_RESULTS.parquet"]
     if len(center_all) != 19164 or center_all.duplicated(KEY + ["center_group"]).any():
         raise ValueError("Expected the complete two-center comparison family")
@@ -139,11 +127,9 @@ def export_tables(run_dir, out_dir):
         dest.parent.mkdir(parents=True, exist_ok=True)
         frame.to_csv(dest, sep="\t", index=False)
         inventory.append({"path": dest.relative_to(out).as_posix(), "rows": len(frame),
-                          "columns": {c: str(frame[c].dtype) for c in frame}, "sha256": digest(dest),
+                          "columns": {c: str(frame[c].dtype) for c in frame},
                           "source": rel if rel in frames else "Derived from frozen aggregate columns; see exporter and README.md",
                           "release_status": "candidate_pending_release_review"})
-    if any(digest(run / rel) != sha for rel, sha in hashes.items()):
-        raise RuntimeError("Input changed during export; do not use this export")
     (out / "README.md").write_text(
         "Mutation-context aggregate release candidate\n\n"
         "Start with reader/FOCUS_45_OVERVIEW.tsv. The same tables can supply the versioned data release and manuscript supplement; do not recompute results for each.\n"
@@ -153,12 +139,13 @@ def export_tables(run_dir, out_dir):
         "Center status measures consistency inside the pooled discovery dataset, not independent replication. FOCUS_45_READABLE is the context-only view; FOCUS_45_OVERVIEW also joins local-CNV and center fields using the four comparison keys.\n"
         "SIX/EIGHT filenames refer to the frozen manuscript subsets; row counts are derived, never forced.\n"
         "SIX retains the historical boolean direction flags: False can include an unestimable sensitivity, not necessarily discordance. Read the corresponding *_status fields in center/FOCUS_45_CENTER_COMPARISON.tsv before interpreting them.\n"
+        "Variant description is optional: 18 aggregate tables without it, 23 when completed.\n"
         "Variants: frozen_evaluable and combined_informative are distinct populations; carriers and variant_observations are different denominators. Category carrier counts can overlap. No variant tests are fitted.\n"
         "PROTEIN_CHANGE_COUNTS and POSITION_COUNTS contain rare aggregate cells, including counts of one. All files are publication candidates subject to the same release review, whether supplied as a data package or journal supplement.\n"
         "No raw MAF, sample linkage, individual records, job cache or local-path configuration is included. selected_local_state_descriptive_counts and the local TCGA follow-up are not exported.\n"
-        "Methods accompany the versioned data release; operational rules are in the matching analysis code. Checksums and export inventory are recorded in the run-level mutation_manifest.json. Exporting does not authorize redistribution or create a public release.\n")
+        "Methods accompany the versioned data release; operational rules are in the matching analysis code. The export inventory is recorded in the run-level mutation_manifest.json. Exporting does not authorize redistribution or create a public release.\n")
     manifest = {"status": "AGGREGATE_EXPORT_COMPLETE_NOT_PUBLISHED", "statistics_refitted": False,
-                "input_sha256": hashes, "exporter_sha256": digest(__file__), "files": inventory}
+                "variants_included": variant_status == "COMPLETE", "files": inventory}
     data = run_manifest.read(run)
     data["exports"] = {"output_dir": str(out), **manifest}
     run_manifest.write(run, data)

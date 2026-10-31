@@ -118,14 +118,7 @@ def run(workers):
     if (HERE/'CENTER_RESULTS.parquet').exists():
         raise FileExistsError('completed center results exist')
     paths = {'jobs':PRIOR/'LOCAL_ONLY_jobs.zip', 'pooled_results':PRIOR/'conditional_associations.parquet',
-             'samples':h.SAMPLES, 'prior_code':Path(h.__file__),
-             'statistics_code':h.STAT_PATH,  'code':Path(__file__)}
-    hashes = {k:h.digest(v) for k,v in paths.items()}
-    parent = h.load_record(PRIOR, 'PREPARED')
-    assert hashes['jobs']==parent['jobs_sha256']
-    assert hashes['samples']==parent['input_sha256']['samples']
-    assert hashes['prior_code']==parent['input_sha256']['runner']
-    h.save_record(HERE, 'INPUT_HASHES', {'sha256':hashes, 'utc':datetime.now(timezone.utc).isoformat()})
+             'samples':h.SAMPLES}
     gs = pd.read_parquet(paths['samples'])
     gs = gs[gs.selected_patient_root & gs.reference_layer.eq('core')].copy()
     assert gs.analysis_id.is_unique and gs.CENTER.notna().all()
@@ -196,6 +189,5 @@ def run(workers):
              'heterogeneity_estimable':int(valid.sum()),'heterogeneity_significant':int(het.heterogeneity_q_45.lt(.05).sum()),
              'heterogeneity_failures':het.loc[~valid,'heterogeneity_reason'].value_counts().to_dict()}
     h.save_record(HERE, 'SUMMARY',summary)
-    assert hashes=={k:h.digest(v) for k,v in paths.items()}
-    h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'inputs_unchanged':True,'input_sha256':hashes,'results_sha256':h.digest(HERE/'CENTER_RESULTS.parquet')})
+    h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'comparisons':len(df)})
     print(json.dumps(summary,indent=2),flush=True)

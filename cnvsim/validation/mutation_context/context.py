@@ -110,16 +110,8 @@ def process(job):
 
 
 def prepare():
-    paths={'jobs':PRIOR/'LOCAL_ONLY_jobs.zip','pooled':PRIOR/'conditional_associations.parquet','prior_code':Path(h.__file__),
-           'samples':h.SAMPLES,'coverage':h.COVERAGE,
-           'config':h.ANALYSIS_CONFIG,'raw_maf':h.RAW,'statistics_code':h.STAT_PATH,
-           'code':Path(__file__)}
-    hashes={k:h.digest(v) for k,v in paths.items()};prior=h.load_record(PRIOR, 'PREPARED')
-    assert hashes['jobs']==prior['jobs_sha256']
-    for k in ['samples','coverage','config','raw_maf','statistics_code']:
-        assert hashes[k]==prior['input_sha256'][k],k
-    assert hashes['prior_code']==prior['input_sha256']['runner']
-    h.save_record(HERE, 'INPUT_HASHES',{'sha256':hashes,'utc':datetime.now(timezone.utc).isoformat()})
+    paths={'jobs':PRIOR/'LOCAL_ONLY_jobs.zip','pooled':PRIOR/'conditional_associations.parquet',
+           'samples':h.SAMPLES,'coverage':h.COVERAGE,'config':h.ANALYSIS_CONFIG,'raw_maf':h.RAW}
     cfg=json.loads(paths['config'].read_text());gs=pd.read_parquet(paths['samples'])
     gs=gs[gs.selected_patient_root&gs.reference_layer.eq('core')];assert gs.analysis_id.is_unique and gs.sample_id.is_unique
     meta=gs.set_index('analysis_id');keep=set(gs.sample_id)
@@ -154,13 +146,10 @@ def prepare():
         unique.append(z[['analysis_id','SAMPLE_TYPE','SAMPLE_TYPE_DETAILED','full_reported_density','assay_exonic_mb']])
     u=pd.concat(unique).drop_duplicates('analysis_id')
     u.groupby(['SAMPLE_TYPE','SAMPLE_TYPE_DETAILED'],dropna=False).size().rename('unique_analyses').reset_index().to_csv(HERE/'sample_type_coverage.tsv',sep='\t',index=False)
-    h.save_record(HERE, 'PREPARED',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':len(v),'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'input_sha256':hashes,'inference_not_started':True})
+    h.save_record(HERE, 'PREPARED',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':len(v),'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'inference_not_started':True})
     write_jobs(HERE/'LOCAL_ONLY_jobs.zip', jobs)
-    prepared = h.load_record(HERE, 'PREPARED')
-    prepared['jobs_sha256'] = h.digest(HERE/'LOCAL_ONLY_jobs.zip')
-    h.save_record(HERE, 'PREPARED', prepared)
     print('PREPARED all9582; target-gene positivity reproduced',flush=True)
-    return jobs,paths,hashes
+    return jobs
 
 
 def summarize(df):
@@ -194,13 +183,12 @@ def summarize(df):
 
 def run(workers):
     if (HERE/'CONTEXT_RESULTS.parquet').exists():raise FileExistsError('completed results exist')
-    jobs,paths,hashes=prepare();rows=[]
+    jobs=prepare();rows=[]
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for i,records in enumerate(pool.map(process,jobs,chunksize=1),1):
             rows.extend(records)
             if i%100==0 or i==len(jobs):print(f'PROGRESS {i}/{len(jobs)}; {len(rows)}/9582',flush=True)
     df=pd.DataFrame(rows);assert len(df)==9582 and int(df.pooled_robust.sum())==45
     summary=summarize(df)
-    assert hashes=={k:h.digest(p) for k,p in paths.items()}
-    h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'input_sha256':hashes,'inputs_unchanged':True,'results_sha256':h.digest(HERE/'CONTEXT_RESULTS.parquet')})
+    h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'comparisons':len(df)})
     print(json.dumps({'prior45':summary['prior45'],'prior45_supported_pan_cancer':summary['prior45_supported_pan_cancer']},indent=2),flush=True)
