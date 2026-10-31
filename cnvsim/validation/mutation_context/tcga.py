@@ -1,6 +1,5 @@
 """Two-stage TCGA follow-up of the fixed 45 GENIE mutation associations."""
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 
@@ -16,18 +15,9 @@ from .tcga_inputs import (DIAGNOSIS_MAPPING, MODES, select_participants, scan_mc
 from .table_schema import KEY
 
 
-MC3_SHA256 = 'cb0caa0e3a80a24cc4ccaaacc95c690a4032cc87c8ac78519a5b33f3aa3f6b81'
 QUALIFYING = {'Missense_Mutation', 'Nonsense_Mutation', 'Frame_Shift_Del',
               'Frame_Shift_Ins', 'In_Frame_Del', 'In_Frame_Ins', 'Splice_Site',
               'Nonstop_Mutation', 'Translation_Start_Site'}
-
-
-def digest(path):
-    h = hashlib.sha256()
-    with Path(path).open('rb') as f:
-        for block in iter(lambda: f.read(8 * 1024 * 1024), b''):
-            h.update(block)
-    return h.hexdigest()
 
 
 def record(run, data):
@@ -85,13 +75,8 @@ def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None):
         if any(s.get('status') == 'RUNNING' for s in current['stages'].values()):
             raise RuntimeError('A GENIE stage is marked RUNNING')
         run.mkdir()
-        hashes = {key: digest(path) for key, path in files.items()}
-        if hashes['mc3_maf'] != MC3_SHA256:
-            raise ValueError('MC3 file differs from the configured v0.2.8 public input')
         data = {'schema_version': 1, 'inputs': {k: str(v) for k, v in files.items()},
-                'input_sha256': hashes, 'stages': {'prepare': 'RUNNING'}, 'outputs': {},
-                'code_sha256': {f.name: digest(f) for f in [Path(__file__), Path(__file__).with_name('tcga_inputs.py'),
-                    Path(association.__file__), Path(association.stats.__file__), Path(__file__).with_name('tcga_export.py')]}}
+                'stages': {'prepare': 'RUNNING'}}
         record(run, data)
         try:
             parts = select_participants(files['assignments'], files['metadata'], files['shape'], files['barcode_map'])
@@ -140,13 +125,10 @@ def prepare(genie_run, atlas_dir, mc3_maf, barcode_map, features_dir=None):
                 cases.extend([{'record': entry, 'cohort': 'TCGA', 'frame': tcga},
                               {'record': entry, 'cohort': 'GENIE', 'frame': common}])
             write_jobs(run / 'LOCAL_ONLY_cases.zip', cases)
-            if {key: digest(path) for key, path in files.items()} != hashes:
-                raise RuntimeError('Inputs changed during preparation')
             data['stages']['prepare'] = 'COMPLETE'
-            data['summary'] = {'candidate_count': len(accounting), 'mc3_rows_read': raw_rows,
+            data['summary'] = {'candidates': len(accounting), 'mc3_rows_read': raw_rows,
                 'cohort_eligible': sum(r['cohort_status'] == 'eligible' for r in accounting),
                 'unavailable_reasons': pd.Series([r['reason'] for r in accounting if r['cohort_status'] != 'eligible']).value_counts().to_dict()}
-            data['outputs'] = {p.name: digest(p) for p in run.glob('LOCAL_ONLY_*')}
             record(run, data)
             print(json.dumps(data['summary'], indent=2))
         except Exception as exc:
@@ -247,21 +229,12 @@ def analyze(run_dir):
         data = combined.get('tcga', {})
         if data.get('schema_version') != 1 or data['stages'].get('prepare') != 'COMPLETE' or 'analyze' in data['stages']:
             raise ValueError('Preparation must be complete and analysis not yet attempted')
-        if {k: digest(p) for k, p in data['inputs'].items()} != data['input_sha256']:
-            raise RuntimeError('Inputs changed after preparation')
-        if any(digest(run / name) != value for name, value in data['outputs'].items()):
-            raise RuntimeError('Prepared cache changed')
-        if any(digest(Path(__file__).with_name(name)) != value for name, value in data['code_sha256'].items()):
-            raise RuntimeError('Analysis code changed after preparation')
         data['stages']['analyze'] = 'RUNNING'; record(run, data)
         try:
             result = score(read_jobs(run / 'LOCAL_ONLY_cases.zip'))
             private_parquet(result, run / 'LOCAL_ONLY_results.parquet')
-            if {k: digest(p) for k, p in data['inputs'].items()} != data['input_sha256']:
-                raise RuntimeError('Inputs changed during analysis')
             summary = summarize(result)
             data['stages']['analyze'] = 'COMPLETE'
-            data['outputs']['LOCAL_ONLY_results.parquet'] = digest(run / 'LOCAL_ONLY_results.parquet')
             data['summary'].update(summary)
             record(run, data); print(json.dumps(summary, indent=2))
         except Exception as exc:

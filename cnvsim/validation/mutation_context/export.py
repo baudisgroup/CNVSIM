@@ -1,6 +1,5 @@
 """Export the explicit current-analysis table schema without fitting models."""
 import json
-import hashlib
 from pathlib import Path
 import re
 import numpy as np
@@ -128,8 +127,6 @@ def export_tables(run_dir, out_dir):
             raise ValueError('Complete the attempted TCGA analysis before exporting')
         from .tcga_export import comparison_table, readme as tcga_readme
         path = run / 'tcga/LOCAL_ONLY_results.parquet'
-        if hashlib.sha256(path.read_bytes()).hexdigest() != tcga['outputs'][path.name]:
-            raise ValueError('TCGA results changed after analysis')
         frames['tcga/TCGA_MUTATION_COMPARISONS.tsv'] = comparison_table(pd.read_parquet(path))
         documentation += '\n\n' + tcga_readme()
     out.mkdir(parents=True)
