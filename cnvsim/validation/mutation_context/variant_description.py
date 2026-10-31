@@ -10,6 +10,7 @@ import pandas as pd
 from . import sensitivity as c
 h = c.h
 from .cache import read_jobs, write_jobs
+from .table_schema import KEY, TABLE_COLUMNS, select_columns
 HERE = PRIOR = None
 FASTA_DIR = None
 CASES=[('C50','IDC','C50-CTX4','ESR1'),('C50','IDC','C50-CTX4','GATA3'),('C18_C20','COAD','C18_C20-CTX10','EP300')]
@@ -120,13 +121,13 @@ def main(refresh=False):
     raw=pd.read_parquet(raw_path);cfg=json.loads(paths['config'].read_text())
     q=raw[raw.FILTER.eq('PASS')&raw.Annotation_Status.eq('SUCCESS')&raw.NCBI_Build.eq('GRCh37')&raw.Mutation_Status.str.lower().eq('somatic')&raw.Variant_Classification.isin(cfg['qualifying_classes'])].copy()
     qualified=q.drop_duplicates(DEDUP)
-    oldr=pd.read_parquet(paths['context_results']).set_index(c.KEY)
+    sensitivity_results=pd.read_parquet(paths['context_results']).set_index(c.KEY)
     cohort_rows=[];count_rows=[];protein_rows=[];local_frames=[];sample_frames=[];audit=[];position_rows=[];aux_rows=[]
     for root,dx,target,g,job in chosen:
-        frame=job['frame'].copy(); frozen=next(x for x in job['rows'] if x['subtype']==target)
-        r=oldr.loc[(root,dx,g,target)];mask=frame.assigned_reference_key.eq(target)
+        frame=job['frame'].copy(); frozen=next(x for x in job['rows'] if x['target_subtype']==target)
+        r=sensitivity_results.loc[(root,dx,target,g)];mask=frame.assigned_reference_key.eq(target)
         observed=[int(mask.sum()),int(frame.loc[mask,'positive'].sum()),int((~mask).sum()),int(frame.loc[~mask,'positive'].sum())]
-        assert observed==[int(frozen[k]) for k in ['subtype_n','subtype_pos','other_subtypes_n','other_subtypes_pos']]
+        assert observed==[int(frozen[k]) for k in ['target_n','target_mutated','control_n','control_mutated']]
         allv=qualified[qualified.Hugo_Symbol.eq(g)&qualified.Tumor_Sample_Barcode.isin(frame.sample_id)].copy()
         counts=allv.groupby('Tumor_Sample_Barcode').size()
         assert frame.sample_id.map(counts).fillna(0).astype(int).eq(frame.target_gene_records).all()
@@ -134,9 +135,9 @@ def main(refresh=False):
         assert frame.sample_id.is_unique and frame.analysis_id.is_unique
         complete=frame[frame.SAMPLE_TYPE.isin(['Primary','Metastasis'])].dropna(subset=['gain','loss','leave_gene_out_density'])
         base,info,_=h.exact_result(complete,target,'binary');active=complete.iloc[np.flatnonzero(info)]
-        assert h.support(base,int(frozen['subtype_n']))
-        for key in ['target_informative','control_informative','strata']:assert base[key]==r['support_'+key]
-        assert len(active)==r.combined_n
+        assert h.support(base,int(frozen['target_n']))
+        assert len(active)==r.combined_model_n
+        assert r.combined_status == 'estimable'
         unique=[]
         for _,group in allv.groupby(ALLELE,dropna=False,sort=True):
             row=group.iloc[0].to_dict()
@@ -148,14 +149,13 @@ def main(refresh=False):
                           reference_mismatches=int(v.reference_residue_status.eq('mismatch').sum()),
                           distinct_transcripts=sorted(v.Transcript_ID.dropna().unique().tolist()),
                           full_short_HGVS_disagreements=int((v.HGVSp.map(norm).ne(v.HGVSp_Short.map(norm))&v.HGVSp.notna()&v.HGVSp_Short.notna()).sum())))
-        for pop,popframe in [('frozen_evaluable',frame),('combined_informative',active)]:
+        for pop,popframe in [('main_analysis_samples',frame),('adjusted_model_samples',active)]:
             for side,f in [('target',popframe[popframe.assigned_reference_key.eq(target)]),('control',popframe[popframe.assigned_reference_key.ne(target)])]:
                 w=v[v.Tumor_Sample_Barcode.isin(f.sample_id)].copy();carriers=int(f.positive.sum());n=len(f)
                 assert w.Tumor_Sample_Barcode.nunique()==carriers
-                keys=dict(root=root,diagnosis=dx,subtype=target,gene=g,population=pop,group=side)
+                keys=dict(root=root,diagnosis=dx,target_subtype=target,gene=g,population=pop,group=side)
                 cr=keys|dict(evaluable_samples=n,mutation_carriers=carriers,variant_observations=len(w),
                       distinct_genomic_alleles=len(w.drop_duplicates(ALLELE[1:])),mutation_rate=carriers/n,
-                      retained_from_frozen=n/(int(frozen['subtype_n']) if side=='target' else int(frozen['other_subtypes_n'])),
                       primary_samples=int(f.SAMPLE_TYPE.eq('Primary').sum()),metastasis_samples=int(f.SAMPLE_TYPE.eq('Metastasis').sum()),
                       coordinate_unknown_variants=int((~w.coordinate_usable).sum()))
                 cohort_rows.append(cr)
@@ -177,12 +177,16 @@ def main(refresh=False):
                 sample_frames.append(sf)
     outputs={'COHORT_COUNTS':cohort_rows,'CATEGORY_COUNTS':count_rows,'PROTEIN_CHANGE_COUNTS':protein_rows,'POSITION_COUNTS':position_rows,'DOMAIN_RELATION_COUNTS':aux_rows}
     for name,rows in outputs.items():
-        table=pd.DataFrame(rows);table.to_csv(HERE/(name+'.tsv'),sep='\t',index=False)
+        table=pd.DataFrame(rows)
+        path='variant_description/'+name+'.tsv'
+        if path in TABLE_COLUMNS:
+            table=select_columns(table, TABLE_COLUMNS[path])
+        table.to_csv(HERE/(name+'.tsv'),sep='\t',index=False)
         assert not any(col in table for col in ['sample_id','analysis_id','Tumor_Sample_Barcode'])
     pd.concat(local_frames,ignore_index=True).to_parquet(HERE/'LOCAL_ONLY_annotated_variants.parquet',index=False)
     pd.concat(sample_frames,ignore_index=True).to_parquet(HERE/'LOCAL_ONLY_cohort_members.parquet',index=False)
     h.save_record(HERE, 'AUDIT',{'created_utc':datetime.now(timezone.utc).isoformat(),'cases':audit,
           'all_frozen_denominators_and_positives_reproduced':True,'combined_information_masks_reproduced':True,
           'new_statistical_tests':0,'sources_refreshed_from_raw_maf':refresh})
-    print(pd.DataFrame(cohort_rows).query("population=='combined_informative'")[['gene','group','evaluable_samples','mutation_carriers','variant_observations']].to_string(index=False))
+    print(pd.DataFrame(cohort_rows).query("population=='adjusted_model_samples'")[['gene','group','evaluable_samples','mutation_carriers','variant_observations']].to_string(index=False))
     print('COMPLETE: frozen counts and conditional information sets reproduced; no new tests')

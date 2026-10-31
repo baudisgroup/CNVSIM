@@ -39,8 +39,8 @@ def check_inputs(files):
         missing = columns - set(pq.read_schema(files[key]).names)
         if missing:
             raise ValueError(f"{key} missing columns: {sorted(missing)}")
-    contrasts = pd.read_parquet(files["contrasts"])
-    keys = ["root", "ONCOTREE_CODE", "gene", "subtype"]
+    contrasts = association.read_comparison_plan(files["contrasts"])
+    keys = ["root", "diagnosis", "target_subtype", "gene"]
     if len(contrasts) != 9582 or contrasts.duplicated(keys).any():
         raise ValueError("Expected the complete frozen 9,582-comparison family")
     samples = pd.read_parquet(files["genie_samples"], columns=["selected_patient_root", "has_any_raw_mutation_record"])

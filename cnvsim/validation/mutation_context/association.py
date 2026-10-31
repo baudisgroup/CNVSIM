@@ -18,6 +18,7 @@ from statsmodels.stats.multitest import multipletests
 
 from . import statistics as stats
 from .cache import read_jobs, write_jobs
+from .table_schema import KEY, COUNTS, INPUT_COLUMNS, INPUT_RENAME, ASSOCIATION_COLUMNS, normalize_model_columns, select_columns
 from .manifest import save_record, has_record
 
 exact = stats.fast_two_by_two_exact_and_cmh
@@ -39,6 +40,11 @@ def inputs():
     return files
 
 
+def read_comparison_plan(path):
+    """Read only the planned comparisons and four unadjusted cohort counts."""
+    return pd.read_parquet(path, columns=INPUT_COLUMNS).rename(columns=INPUT_RENAME)
+
+
 def prepare():
     if has_record(HERE, 'PREPARED'):
         raise FileExistsError('prepared inputs already exist')
@@ -46,9 +52,9 @@ def prepare():
     # Our upstream sequence_variant_v1.yaml is saved as analysis_config.json.
     # It contains analysis rules, not a GENIE-supplied data file.
     cfg = json.loads(paths['config'].read_text())
-    w = pd.read_parquet(paths['contrasts'])
+    w = read_comparison_plan(paths['contrasts'])
     assert len(w) == 9582
-    assert not w.duplicated(['root', 'ONCOTREE_CODE', 'gene', 'subtype']).any()
+    assert not w.duplicated(['root', 'diagnosis', 'gene', 'target_subtype']).any()
     gs = pd.read_parquet(paths['samples'])
     gs = gs[gs.selected_patient_root & gs.reference_layer.eq('core')].copy()
     assert gs.analysis_id.is_unique and gs.sample_id.is_unique
@@ -82,7 +88,7 @@ def prepare():
         X = pd.read_parquet(paths['features_' + root], columns=wanted)
         assert X.index.is_unique
         gr = gs[gs.root.eq(root)]
-        for (dx, gene), wg in wr.groupby(['ONCOTREE_CODE', 'gene'], sort=True):
+        for (dx, gene), wg in wr.groupby(['diagnosis', 'gene'], sort=True):
             assays = set(coverage.loc[coverage.Hugo_Symbol.eq(gene) & coverage.atlas_eligible, 'SEQ_ASSAY_ID'])
             # Primary positive and negative rules are copied as logical definitions,
             # not approximated by "no mutation row means negative".
@@ -96,13 +102,13 @@ def prepare():
             counts = z.assigned_reference_key.value_counts()
             z = z[z.assigned_reference_key.isin(counts[counts.ge(cfg['eligibility']['within_diagnosis_min_evaluable'])].index)].copy()
             z['fga_bin'] = pd.qcut(z.cnv_fraction.rank(method='first'), q=5, labels=False).astype(int)
-            assert set(z.assigned_reference_key) == set(wg.subtype)
+            assert set(z.assigned_reference_key) == set(wg.target_subtype)
             for row in wg.itertuples():
-                t = z.assigned_reference_key.eq(row.subtype)
+                t = z.assigned_reference_key.eq(row.target_subtype)
                 found = (int(t.sum()), int(z.loc[t, 'positive'].sum()), int((~t).sum()), int(z.loc[~t, 'positive'].sum()))
-                expected = (int(row.subtype_n), int(row.subtype_pos), int(row.other_subtypes_n), int(row.other_subtypes_pos))
+                expected = (int(row.target_n), int(row.target_mutated), int(row.control_n), int(row.control_mutated))
                 if found != expected:
-                    raise ValueError((root, dx, gene, row.subtype, found, expected))
+                    raise ValueError((root, dx, gene, row.target_subtype, found, expected))
             gain, loss = gene + '__gain', gene + '__loss'
             available = gain in X and loss in X
             if available:
@@ -119,7 +125,7 @@ def prepare():
             jobs.append({'root': root, 'diagnosis': dx, 'gene': gene, 'frame': z[[
                 'analysis_id', 'sample_id', 'assigned_reference_key', 'SEQ_ASSAY_ID',
                 'positive', 'cnv_fraction', 'fga_bin', 'gain', 'loss']].reset_index(drop=True),
-                'rows': wg.to_dict('records'), 'available': available})
+                'rows': wg[KEY + COUNTS].to_dict('records'), 'available': available})
         print(f'PREPARED {root}: {len(wr)} comparisons', flush=True)
     assert sum(len(j['rows']) for j in jobs) == len(w)
     write_jobs(HERE / 'LOCAL_ONLY_jobs.zip', jobs)
@@ -237,15 +243,12 @@ def process_job(job):
     z = job['frame']
     output = []
     for original in job['rows']:
-        row = dict(original)
-        target = original['subtype']
-        base, _, _ = exact_result(z, target, None)
-        p_old = original['assay_fga_exact_score_p']
-        if not np.isclose(base['p'], p_old, rtol=1e-6, atol=1e-300, equal_nan=True):
-            raise ValueError(('frozen_p_not_reproduced', job['root'], job['diagnosis'], job['gene'], target, base['p'], p_old))
-        assert base['strata'] == original['n_informative_assay_fga_strata']
-        assert base['target_informative'] + base['control_informative'] == original['n_in_assay_fga_strata']
-        row['frozen_p_reproduced'] = True
+        target = original['target_subtype']
+        left = z.assigned_reference_key.eq(target)
+        row = {k: original[k] for k in KEY}
+        row.update(target_n=int(left.sum()), target_mutated=int(z.loc[left, 'positive'].sum()),
+                   control_n=int((~left).sum()), control_mutated=int(z.loc[~left, 'positive'].sum()))
+        assert all(row[k] == original[k] for k in COUNTS)
         for name in ('primary', 'amplitude', 'continuous'):
             row.update({name+'_status': 'not_estimable', name+'_reason': 'local_gene_not_encoded',
                         name+'_p': np.nan, name+'_or': np.nan})
@@ -260,24 +263,14 @@ def process_job(job):
         pri, info, st_idx = exact_result(complete, target, 'binary')
         amp, _, _ = exact_result(complete, target, 'amplitude')
         for name, res in [('primary', pri), ('amplitude', amp)]:
-            good = support(res, original['subtype_n'])
+            good = support(res, original['target_n'])
             row.update({name+'_'+k: v for k, v in res.items()})
             row[name+'_status'] = 'estimable' if good else 'not_estimable'
             row[name+'_reason'] = '' if good else 'insufficient_common_support'
-            row[name+'_target_retention'] = res['target_informative'] / original['subtype_n']
-            row[name+'_control_retention'] = res['control_informative'] / original['other_subtypes_n']
-        diffs, weights = [], []
-        for st in np.unique(st_idx[info]):
-            g = complete.iloc[np.where((st_idx == st) & info)[0]]
-            lm = g.assigned_reference_key.eq(target)
-            diffs.append(abs(g.loc[lm, 'cnv_fraction'].mean()-g.loc[~lm, 'cnv_fraction'].mean()))
-            weights.append(lm.sum()*(~lm).sum()/len(g))
-        row['within_stratum_weighted_abs_fga_mean_gap'] = float(np.average(diffs, weights=weights)) if weights else np.nan
         if row['primary_status'] == 'estimable':
             knots = np.quantile(z.cnv_fraction, [.05, .35, .65, .95])
             lr = continuous(complete.iloc[np.flatnonzero(info)], target, knots)
-            row.update({'continuous_'+k: v for k, v in lr.items()})
-            row['continuous_fga_knots'] = ','.join(map(str, knots))
+            row.update({'continuous_'+k: v for k, v in lr.items() if k not in ('rank', 'lr')})
         else:
             row['continuous_reason'] = 'primary_common_support_insufficient'
         output.append(row)
@@ -288,43 +281,36 @@ def summarize(frame):
     out = frame.copy()
     for name in ('primary', 'amplitude', 'continuous'):
         valid = out[name+'_status'].eq('estimable') & np.isfinite(out[name+'_p'])
-        out[name+'_q_declared'] = multipletests(out[name+'_p'].where(valid, 1.), method='fdr_bh')[1]
-        out[name+'_q_estimable'] = np.nan
-        if valid.any():
-            out.loc[valid, name+'_q_estimable'] = multipletests(out.loc[valid, name+'_p'], method='fdr_bh')[1]
-        out[name+'_significant'] = valid & out[name+'_q_declared'].lt(.05)
+        out[name+'_q'] = multipletests(out[name+'_p'].where(valid, 1.), method='fdr_bh')[1]
     labels = []
     for row in out.itertuples():
         if row.primary_status != 'estimable':
             label = 'not_estimable'
-        elif not row.primary_significant:
+        elif not row.primary_q < .05:
             label = 'no_detected_residual_association'
         elif row.amplitude_status != 'estimable' or row.continuous_status != 'estimable':
             label = 'partial_support_unestimable'
-        elif not row.amplitude_significant or not row.continuous_significant:
+        elif not row.amplitude_q < .05 or not row.continuous_q < .05:
             label = 'primary_only_not_robust'
         elif len({np.sign(np.log(x)) for x in (row.primary_or, row.amplitude_or, row.continuous_or)}) > 1:
             label = 'direction_inconsistent'
         else:
             label = 'robust_residual_association'
         labels.append(label)
-    out['residual_status'] = labels
-    out['primary_direction_agrees_with_old_fga'] = np.sign(np.log(out.primary_or)) == np.sign(np.log(out.assay_fga_cmh_or))
+    out['association_status'] = labels
+    out = select_columns(normalize_model_columns(out, ('primary', 'amplitude', 'continuous')), ASSOCIATION_COLUMNS)
     out.to_parquet(HERE / 'conditional_associations.parquet', index=False)
     out.to_csv(HERE / 'conditional_associations.tsv', sep='\t', index=False)
     def counts(g):
-        return {'comparisons': len(g), 'status_counts': g.residual_status.value_counts().to_dict(),
+        return {'comparisons': len(g), 'status_counts': g.association_status.value_counts().to_dict(),
                 'checks': {n: {'estimable': int(g[n+'_status'].eq('estimable').sum()),
-                              'significant': int(g[n+'_significant'].sum()),
+                              'significant': int((g[n+'_status'].eq('estimable') & g[n+'_q'].lt(.05)).sum()),
                               'failure_reasons': g.loc[g[n+'_status'].ne('estimable'), n+'_reason'].value_counts().to_dict()}
                            for n in ('primary', 'amplitude', 'continuous')},
-                'primary_supported_subtypes': int(g.loc[g.primary_significant, 'subtype'].nunique()),
-                'robust_subtypes': int(g.loc[g.residual_status.eq('robust_residual_association'), 'subtype'].nunique()),
-                'robust_roots': int(g.loc[g.residual_status.eq('robust_residual_association'), 'root'].nunique())}
+                'primary_supported_subtypes': int(g.loc[g.primary_status.eq('estimable') & g.primary_q.lt(.05), 'target_subtype'].nunique()),
+                'robust_subtypes': int(g.loc[g.association_status.eq('robust_residual_association'), 'target_subtype'].nunique()),
+                'robust_roots': int(g.loc[g.association_status.eq('robust_residual_association'), 'root'].nunique())}
     summary = {'all': counts(out),
-               'old_panel_significant_512': counts(out[out.assay_exact_score_q_declared.lt(.05)]),
-               'old_fga_retained_71': counts(out[out.fga_stratification_status.eq('retained_after_fga_stratification')]),
-               'by_old_status': {k: counts(g) for k, g in out.groupby('fga_stratification_status')},
                'interpretation': 'Exploratory conditional association, not causal, predictive or independent source validation.'}
     save_record(HERE, 'SUMMARY', summary)
     return summary
@@ -343,8 +329,8 @@ def analyze(workers):
             if i % 100 == 0 or i == len(jobs):
                 print(f'PROGRESS {i}/{len(jobs)} groups, {len(records)}/9582 comparisons', flush=True)
     df = pd.DataFrame(records)
-    assert len(df) == 9582 and df.frozen_p_reproduced.all()
+    assert len(df) == 9582
     summary = summarize(df)
     save_record(HERE, 'COMPLETE', {'utc': datetime.now(timezone.utc).isoformat(),
-              'reproduced_all_frozen_counts_and_p_values': True})
-    print(json.dumps({k: summary[k] for k in ('all', 'old_fga_retained_71')}, indent=2), flush=True)
+              'all_planned_cohort_counts_reproduced': True})
+    print(json.dumps(summary, indent=2), flush=True)

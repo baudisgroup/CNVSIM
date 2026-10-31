@@ -16,7 +16,7 @@ from statsmodels.stats.multitest import multipletests
 from . import association as h
 from .cache import read_jobs, write_jobs
 HERE = PRIOR = None
-KEY = ['root', 'ONCOTREE_CODE', 'gene', 'subtype']
+from .table_schema import KEY, CENTER_COLUMNS, CENTER_FOCUS_COLUMNS, normalize_model_columns, select_columns, add_center_directions
 CHECKS = ['primary', 'amplitude', 'continuous']
 
 
@@ -71,19 +71,18 @@ def process(job):
     pooled = job['frame']
     knots = np.quantile(pooled.cnv_fraction, [.05, .35, .65, .95])
     output, interactions = [], []
-    for old in job['rows']:
-        target = old['subtype']
+    for comparison_row in job['rows']:
+        target = comparison_row['target_subtype']
         info_frames = []
         for center in ('MSK', 'non_MSK'):
             z = pooled[pooled.center_group.eq(center)]
             left = z.assigned_reference_key.eq(target)
             nt, nc = int(left.sum()), int((~left).sum())
-            row = {k: old[k] for k in KEY}
-            row.update(center_group=center, pooled_robust=old['pooled_robust'],
-                       center_target_n=nt, center_control_n=nc,
-                       center_target_pos=int(z.loc[left, 'positive'].sum()),
-                       center_control_pos=int(z.loc[~left, 'positive'].sum()),
-                       pooled_target_n=int(old['subtype_n']), pooled_control_n=int(old['other_subtypes_n']),
+            row = {k: comparison_row[k] for k in KEY}
+            row.update(center_group=center, in_focus_45=comparison_row['in_focus_45'],
+                       target_n=nt, control_n=nc,
+                       target_mutated=int(z.loc[left, 'positive'].sum()),
+                       control_mutated=int(z.loc[~left, 'positive'].sum()),
                        local_cnv_missing_n=int(z[['gain', 'loss']].isna().any(axis=1).sum()))
             reason = 'local_gene_not_encoded' if not job['available'] else 'no_target_in_center' if nt==0 else 'no_control_in_center' if nc==0 else 'insufficient_common_support'
             for check in CHECKS:
@@ -98,19 +97,17 @@ def process(job):
                         row.update({name+'_'+k:v for k,v in result.items()})
                         row[name+'_status'] = 'estimable' if good else 'not_estimable'
                         row[name+'_reason'] = '' if good else 'insufficient_common_support'
-                        row[name+'_target_retention'] = result['target_informative']/nt
-                        row[name+'_control_retention'] = result['control_informative']/nc
                     if row['primary_status']=='estimable':
                         active = complete.iloc[np.flatnonzero(info)]
                         info_frames.append(active)
-                        row.update({'continuous_'+k:v for k,v in h.continuous(active, target, knots).items()})
+                        row.update({'continuous_'+k:v for k,v in h.continuous(active, target, knots).items() if k not in ('rank', 'lr')})
                     else:
                         row['continuous_reason'] = 'primary_common_support_insufficient'
             output.append(row)
-        if old['pooled_robust']:
-            out = {k:old[k] for k in KEY}
+        if comparison_row['in_focus_45']:
+            out = {k:comparison_row[k] for k in KEY}
             result = heterogeneity(pd.concat(info_frames), target, knots) if len(info_frames)==2 else dict(status='not_estimable', reason='both_centers_not_supported', p=np.nan, interaction_or=np.nan)
-            out.update({'heterogeneity_'+k:v for k,v in result.items()})
+            out.update({'heterogeneity_'+k:v for k,v in result.items() if k != 'lr'})
             interactions.append(out)
     return output, interactions
 
@@ -126,7 +123,7 @@ def run(workers):
     assert gs.groupby('SEQ_ASSAY_ID').CENTER.nunique().eq(1).all()
     centers = gs.set_index('analysis_id').CENTER
     pooled = pd.read_parquet(paths['pooled_results'])
-    focus = pooled[pooled.residual_status.eq('robust_residual_association')].copy()
+    focus = pooled[pooled.association_status.eq('robust_residual_association')].copy()
     assert len(focus)==45
     focus_keys = set(map(tuple, focus[KEY].to_numpy()))
     jobs = read_jobs(paths['jobs'])
@@ -136,8 +133,8 @@ def run(workers):
         z['CENTER']=z.analysis_id.map(centers)
         assert z.CENTER.notna().all()
         z['center_group']=np.where(z.CENTER.eq('MSK'),'MSK','non_MSK')
-        for old in job['rows']:
-            old['pooled_robust']=tuple(old[k] for k in KEY) in focus_keys
+        for comparison_row in job['rows']:
+            comparison_row['in_focus_45']=tuple(comparison_row[k] for k in KEY) in focus_keys
         unique.append(z[['analysis_id','sample_id','CENTER','center_group']].assign(root=job['root']))
     unique=pd.concat(unique).drop_duplicates('analysis_id')
     unique.groupby(['root','CENTER','center_group']).size().rename('unique_evaluable_analyses').reset_index().to_csv(HERE/'center_sample_counts.tsv', sep='\t', index=False)
@@ -154,12 +151,13 @@ def run(workers):
         assert len(idx)==9582
         for name in CHECKS:
             good=df.loc[idx,name+'_status'].eq('estimable') & np.isfinite(df.loc[idx,name+'_p'])
-            df.loc[idx,name+'_q_declared']=multipletests(df.loc[idx,name+'_p'].where(good,1),method='fdr_bh')[1]
+            df.loc[idx,name+'_q']=multipletests(df.loc[idx,name+'_p'].where(good,1),method='fdr_bh')[1]
+    df = select_columns(normalize_model_columns(df, CHECKS), CENTER_COLUMNS)
     df.to_parquet(HERE/'CENTER_RESULTS.parquet',index=False)
     df.to_csv(HERE/'CENTER_RESULTS.tsv',sep='\t',index=False)
-    comparison=focus[KEY+['primary_or','residual_status','assay_exact_score_q_declared','fga_stratification_status']].rename(columns={'primary_or':'pooled_primary_or'})
+    comparison=focus[KEY+['primary_or']].rename(columns={'primary_or':'main_primary_or'})
     for center in ['MSK','non_MSK']:
-        part=df[df.center_group.eq(center)].drop(columns=['center_group','pooled_robust'])
+        part=df[df.center_group.eq(center)].drop(columns=['center_group','in_focus_45'])
         comparison=comparison.merge(part.rename(columns={c:center+'_'+c for c in part if c not in KEY}),on=KEY,validate='one_to_one')
     het=pd.DataFrame(interactions)
     assert len(het)==45
@@ -173,20 +171,19 @@ def run(workers):
             label='not_comparable_both_centers' if not any(available) else 'MSK_only_estimable' if available[0] else 'non_MSK_only_estimable'
         else:
             signs=[np.sign(np.log(row[c+'_primary_or'])) for c in ['MSK','non_MSK']]
-            label='same_direction_as_pooled' if signs[0]==signs[1]==np.sign(np.log(row['pooled_primary_or'])) else 'center_direction_discordant' if signs[0]!=signs[1] else 'both_opposite_to_pooled'
+            label='same_direction_as_pooled' if signs[0]==signs[1]==np.sign(np.log(row['main_primary_or'])) else 'center_direction_discordant' if signs[0]!=signs[1] else 'both_opposite_to_pooled'
         categories.append(label)
     comparison['center_consistency_status']=categories
+    comparison = select_columns(add_center_directions(comparison), CENTER_FOCUS_COLUMNS)
     comparison.to_csv(HERE/'FOCUS_45_CENTER_COMPARISON.tsv',sep='\t',index=False)
     comparison.to_parquet(HERE/'FOCUS_45_CENTER_COMPARISON.parquet',index=False)
     def counts(g):
         return {c:{n:{'estimable':int(g.loc[g.center_group.eq(c),n+'_status'].eq('estimable').sum()),
-                      'q_under_005':int(g.loc[g.center_group.eq(c),n+'_q_declared'].lt(.05).sum()),
+                      'q_under_005':int(g.loc[g.center_group.eq(c),n+'_q'].lt(.05).sum()),
                       'failure_reasons':g.loc[g.center_group.eq(c)&g[n+'_status'].ne('estimable'),n+'_reason'].value_counts().to_dict()} for n in CHECKS} for c in ['MSK','non_MSK']}
     summary={'unique_analyses_by_center':unique.CENTER.value_counts().to_dict(), 'all':counts(df),
-             'focus_45':counts(df[df.pooled_robust]),
+             'focus_45':counts(df[df.in_focus_45]),
              'focus_consistency':comparison.center_consistency_status.value_counts().to_dict(),
-             'focus_old71_consistency':comparison[comparison.fga_stratification_status.eq('retained_after_fga_stratification')].center_consistency_status.value_counts().to_dict(),
-             'focus_new6_consistency':comparison[comparison.assay_exact_score_q_declared.ge(.05)].center_consistency_status.value_counts().to_dict(),
              'heterogeneity_estimable':int(valid.sum()),'heterogeneity_significant':int(het.heterogeneity_q_45.lt(.05).sum()),
              'heterogeneity_failures':het.loc[~valid,'heterogeneity_reason'].value_counts().to_dict()}
     h.save_record(HERE, 'SUMMARY',summary)

@@ -1,142 +1,136 @@
-"""Export aggregate release candidates and reader tables without fitting models."""
+"""Export the explicit current-analysis table schema without fitting models."""
 import json
 from pathlib import Path
 import re
-
 import numpy as np
 import pandas as pd
-
 from . import manifest as run_manifest
+from .table_schema import KEY, TABLE_COLUMNS, OVERVIEW_COLUMNS, MODEL_DESCRIPTIONS, describe, select_columns, add_center_directions
 
-KEY = ["root", "ONCOTREE_CODE", "gene", "subtype"]
-CHECKS = ["matched_baseline", "density_only", "type_only", "combined", "amplitude", "quadratic", "restricted"]
-STATUS_ORDER = ["supported_across_context_checks", "supported_with_unestimable_sensitivity",
-                "supported_but_not_all_sensitivities", "no_detected_adjusted_association"]
-AGGREGATES = [
-    "association/conditional_associations.parquet", "association/cohort_reconstruction_audit.tsv",
-    "center_consistency/CENTER_RESULTS.parquet", "center_consistency/FOCUS_45_CENTER_COMPARISON.parquet", "center_consistency/center_sample_counts.tsv",
-    "sensitivity/CONTEXT_RESULTS.parquet", "sensitivity/sample_type_coverage.tsv",
-    "variant_description/COHORT_COUNTS.tsv", "variant_description/CATEGORY_COUNTS.tsv", "variant_description/DOMAIN_RELATION_COUNTS.tsv",
-    "variant_description/POSITION_COUNTS.tsv", "variant_description/PROTEIN_CHANGE_COUNTS.tsv",
-]
-
+PARQUET_TABLES = {'association/conditional_associations.tsv', 'center_consistency/CENTER_RESULTS.tsv',
+                  'center_consistency/FOCUS_45_CENTER_COMPARISON.tsv', 'sensitivity/CONTEXT_RESULTS.tsv'}
 
 
 def ensure_aggregate(frame):
-    forbidden = {"analysis_id", "sample_id", "patient_id", "tumor_sample_barcode", "normal_sample_barcode", "external_sample_id"}
+    forbidden = {'analysis_id', 'sample_id', 'patient_id', 'tumor_sample_barcode', 'normal_sample_barcode', 'external_sample_id'}
     if forbidden.intersection(str(c).lower() for c in frame.columns):
-        raise ValueError("Individual-level identifier column in export input")
-    pattern = re.compile(r"GENIE[-_]|TCGA-[A-Za-z0-9]{2}-|pgxbs-|pgxcs-|/Users/|/home/")
-    for col in frame.select_dtypes(include=["object", "string"]):
+        raise ValueError('Individual-level identifier column in export input')
+    pattern = re.compile(r'GENIE[-_]|TCGA-[A-Za-z0-9]{2}-|pgxbs-|pgxcs-|/Users/|/home/')
+    for col in frame.select_dtypes(include=['object', 'string']):
         if frame[col].dropna().astype(str).str.contains(pattern, regex=True).any():
-            raise ValueError(f"Identifier or local path detected in {col}")
+            raise ValueError(f'Identifier or local path detected in {col}')
 
 
 def keyed(frame, expected):
     if len(frame) != expected or frame[KEY].isna().any().any() or frame.duplicated(KEY).any():
-        raise ValueError(f"Expected {expected} unique, nonmissing comparison keys")
+        raise ValueError(f'Expected {expected} unique, nonmissing comparison keys')
     return frame.set_index(KEY).sort_index()
 
 
-def add_center_directions(centers):
-    """Compare two centres' log-OR signs; this is not a significance test.
+def derive_overview(main, sensitivity, centers):
+    mi, si = keyed(main, 9582), keyed(sensitivity, 9582)
+    if not mi.index.equals(si.index):
+        raise ValueError('Association and sensitivity comparison families differ')
+    focus = main[main.association_status.eq('robust_residual_association')].copy()
+    adjusted = sensitivity[sensitivity.in_focus_45]
+    fi, ai, ci = keyed(focus, 45), keyed(adjusted, 45), keyed(centers, 45)
+    if not fi.index.equals(ai.index) or not fi.index.equals(ci.index):
+        raise ValueError('The three focus-comparison families differ')
+    if not np.allclose(fi.primary_or, ci.main_primary_or, rtol=1e-12, atol=0, equal_nan=True):
+        raise ValueError('Center comparison does not match the current main analysis')
+    focus['adjusted_association'] = np.where(focus.primary_or > 1, 'enriched', np.where(focus.primary_or < 1, 'depleted', 'neutral'))
+    columns = [c for c in OVERVIEW_COLUMNS if c in focus]
+    result = focus[columns].merge(adjusted[KEY + ['combined_or', 'combined_ci_low', 'combined_ci_high', 'combined_q', 'sensitivity_status']], on=KEY, validate='one_to_one')
+    result = result.merge(centers[KEY + ['center_consistency_status', 'MSK_primary_or', 'non_MSK_primary_or', 'heterogeneity_q_45']], on=KEY, validate='one_to_one')
+    return select_columns(result, OVERVIEW_COLUMNS).sort_values(KEY, kind='stable')
 
-    same/opposite require two estimable, finite, positive ORs with nonzero
-    log-OR signs. Missing or neutral directions are not_estimable. Agreement
-    with the pooled result remains in the existing center_consistency_status.
-    """
-    out = centers.copy()
-    for name in ("primary", "amplitude", "continuous"):
-        a, b = out[f"MSK_{name}_or"], out[f"non_MSK_{name}_or"]
-        valid = out[f"MSK_{name}_status"].eq("estimable") & out[f"non_MSK_{name}_status"].eq("estimable")
-        valid &= np.isfinite(a) & np.isfinite(b) & a.gt(0) & b.gt(0) & a.ne(1) & b.ne(1)
-        direction = pd.Series("not_estimable", index=out.index)
-        direction.loc[valid] = np.where(np.sign(np.log(a.loc[valid])).eq(np.sign(np.log(b.loc[valid]))), "same", "opposite")
-        out[f"{name}_center_direction"] = direction
-    return out
 
-
-def derive_overview(local, sensitivity, centers):
-    """Join the existing effects and statuses, without fitting or FDR recalculation."""
-    li, si = keyed(local, 9582), keyed(sensitivity, 9582)
-    if not li.index.equals(si.index):
-        raise ValueError("Association and sensitivity comparison families differ")
-    robust = local[local.residual_status.eq("robust_residual_association")].copy()
-    focus = sensitivity[sensitivity.pooled_robust].copy()
-    ri, fi, zi = keyed(robust, 45), keyed(focus, 45), keyed(centers, 45)
-    if not ri.index.equals(fi.index) or not ri.index.equals(zi.index):
-        raise ValueError("The three 45-comparison families differ")
-    for other, name in [(fi.old_primary_or, "sensitivity"), (zi.pooled_primary_or, "center")]:
-        if not np.allclose(ri.primary_or, other, rtol=1e-12, atol=0, equal_nan=True):
-            raise ValueError(f"Pooled effects disagree in {name}")
-    robust["previous_evidence"] = np.select([
-        robust.fga_stratification_status.eq("retained_after_fga_stratification"),
-        robust.assay_exact_score_q_declared.lt(.05)],
-        ["old_FGA_retained", "old_panel_only"], default="new_after_conditioning")
-    robust["direction"] = np.where(robust.primary_or > 1, "higher", np.where(robust.primary_or < 1, "lower", "equal"))
-    columns = ["root", "ONCOTREE_CODE", "subtype", "gene", "previous_evidence", "direction", "subtype_n",
-               "primary_target_informative", "primary_control_informative", "primary_or", "primary_ci_low",
-               "primary_ci_high", "primary_q_declared", "amplitude_q_declared", "continuous_or", "continuous_q_declared",
-               "subtype_pos", "other_subtypes_n", "other_subtypes_pos"]
-    overview = robust[columns].merge(focus[KEY + ["combined_status", "combined_or", "combined_ci_low", "combined_ci_high", "combined_q_declared", "combined_significant", "context_status"]], on=KEY, validate="one_to_one")
-    overview = overview.merge(centers[KEY + ["center_consistency_status", "MSK_primary_status", "MSK_primary_or", "non_MSK_primary_status", "non_MSK_primary_or", "heterogeneity_status", "heterogeneity_q_45"]], on=KEY, validate="one_to_one")
-    return overview.sort_values(KEY, kind="stable")
+def readme(frames):
+    lines = [
+        '# Mutation association results', '',
+        'Start with reader/FOCUS_45_OVERVIEW.tsv. Each association row compares mutation odds in one target CNV subtype with other eligible core subtypes within the same root and diagnosis.', '',
+        'The pipeline reads only four comparison keys and four cohort counts from the supplied comparison plan. Counts are reconstructed from metadata, panel coverage and qualifying reported MAF calls. Upstream test statistics are neither required nor copied into results.', '',
+        'Generation order: association-prepare reconstructs cohorts; association-analyze fits three main models; center-consistency and sensitivity separately follow that analysis; optional variant-description uses the sensitivity sample sets; export-tables joins current results without refitting or recalculating FDR.', '',
+        'Target/control counts are unadjusted evaluable counts. Informative counts identify the subset contributing to a model. CENTER_RESULTS counts refer to that center group. Cohort-audit, center-count and sample-type tables have their own grouped counting units.', '',
+        'adjusted_association sits next to primary_or: enriched means adjusted OR > 1, depleted means adjusted OR < 1, and neutral means OR = 1. These labels describe mutation odds after conditioning on assay, FGA bin and local gene CNV. They can disagree with the crude proportions in target_mutated/target_n and control_mutated/control_n. They do not describe CNV gain/loss or significance of the combined model. An odds ratio is not a mutation-rate ratio.', '',
+        'status=not_estimable means the model did not meet the analysis criteria. Its OR, P and confidence limits are blank. Support counts and failure reasons remain available. A blank is not zero.', '',
+        'For the stratified exact-test models, estimable denotes the prespecified support criteria, not a guarantee of a finite CMH effect estimate. Zero cells can give an unbounded Mantel-Haenszel odds ratio (inf) and unavailable confidence limits while the exact P value is still computed. Such boundary estimates are preserved rather than changing the method after seeing results. In this comparison family they occur only in non-significant comparisons (q>=0.05), outside the main 45.', '',
+        'Model *_q values use BH FDR across the full 9,582 comparisons, separately for each model and each center group where applicable. Non-estimable comparisons enter with p=1, so their q=1 is bookkeeping, not evidence of no association. heterogeneity_q_45 uses a separate family of 45 interaction tests.', '',
+        'The main 45 associations have three estimable models with q<0.05 and matching directions. sensitivity_status distinguishes supported_across_context_checks, supported_with_unestimable_sensitivity, supported_but_not_all_sensitivities, no_detected_adjusted_association, not_estimable, direction_not_estimable and direction_inconsistent. A supported adjusted result must agree with the current main-analysis direction.', '',
+        'Center consistency uses subdivisions of the same discovery cohort. non_MSK pools all non-MSK contributors. Direction agreement is not a significance test or independent replication; lack of detected heterogeneity is not proof that effects are equal.', '',
+        'Variant descriptions concern selected ESR1, GATA3 and EP300 follow-up cases, not new association tests. main_analysis_samples and adjusted_model_samples are different populations. Carriers count samples with reported variants; variant_observations count sample-allele observations. Carrier counts can overlap between categories.', '',
+        'ESR1 categories distinguish Y537/D538 missense variants, other ligand-binding-domain missense variants (311-547), and variants outside that domain. GATA3 categories distinguish splice calls, zinc-finger-2 frameshifts (317-341), predicted truncation/extension and other classes. EP300 categories distinguish truncating/splice calls and missense variants inside/outside the HAT domain (1287-1663). Annotation-unknown records lack verified protein interpretation.', '',
+        'Eight tables are exported without variant description, eleven with it. POSITION_COUNTS and PROTEIN_CHANGE_COUNTS remain in the local run only. Raw MAF, sample linkage, sample-level caches and local paths are not exported. These are release candidates; data-package and supplementary use require the same release review.', '',
+        '## Models', '', '| Prefix | Meaning |', '|---|---|',
+    ]
+    lines.extend(f'| {name} | {meaning} |' for name, meaning in MODEL_DESCRIPTIONS.items())
+    lines += [
+        '', '## Reading the classifications', '',
+        '| Field/value | Meaning |', '|---|---|',
+        '| association_status: robust_residual_association | All three main models are estimable, have q<0.05, and have matching OR directions. |',
+        '| association_status: no_detected_residual_association | The primary model is estimable but does not have q<0.05. |',
+        '| association_status: partial_support_unestimable | The primary model has q<0.05, but at least one of its two sensitivity models cannot be estimated. |',
+        '| association_status: primary_only_not_robust | The primary model has q<0.05; both sensitivity models are estimable, but at least one does not have q<0.05. |',
+        '| association_status: direction_inconsistent | The three main models pass their significance checks but disagree in effect direction. |',
+        '| association_status: not_estimable | The primary model does not meet the analysis criteria. |',
+        '| sensitivity_status: supported_across_context_checks | Combined, amplitude, quadratic and restricted models are estimable, have q<0.05, and agree in direction with each other and the main analysis. |',
+        '| sensitivity_status: supported_with_unestimable_sensitivity | The combined model has q<0.05 and agrees with the main direction; at least one extra check cannot be estimated. This label does not assert that every other check passes. |',
+        '| sensitivity_status: supported_but_not_all_sensitivities | The combined model has q<0.05 and agrees with the main direction; the extra checks are estimable, but at least one has q>=0.05. |',
+        '| sensitivity_status: no_detected_adjusted_association | The combined model is estimable but has q>=0.05. |',
+        '| sensitivity_status: not_estimable | The combined model cannot be estimated. |',
+        '| sensitivity_status: direction_not_estimable | An effect required for direction comparison is missing, non-finite or non-positive. |',
+        '| sensitivity_status: direction_inconsistent | The combined effect disagrees with the main direction, or all significant extra checks do not agree in direction. |',
+        '| center_consistency_status: same_direction_as_pooled | Both center groups have finite positive primary ORs and their directions match the main estimate. |',
+        '| center_consistency_status: MSK_only_estimable / non_MSK_only_estimable | Only the named group has an estimable finite positive primary OR for this comparison. |',
+        '| center_consistency_status: not_comparable_both_centers | Neither group provides an estimable finite positive primary OR. |',
+        '| center_consistency_status: center_direction_discordant / both_opposite_to_pooled | The two center effects disagree with each other / both oppose the main direction. |',
+        '| *_center_direction: same / opposite / not_estimable | Compare the two finite, positive, non-neutral OR directions only. Missing, unsupported or neutral directions are not_estimable; this does not test significance. |',
+    ]
+    lines += ['', '## Tables and fields', '']
+    for name, frame in frames.items():
+        lines += [f'### {name}', '', f'{len(frame):,} rows; {len(frame.columns)} columns.', '', '| Field | Definition |', '|---|---|']
+        lines.extend(f'| {column} | {describe(column)} |' for column in frame)
+        lines.append('')
+    return '\n'.join(lines)
 
 
 def export_tables(run_dir, out_dir):
     run, out = Path(run_dir).expanduser().resolve(), Path(out_dir).expanduser().resolve()
     if run == out or run in out.parents or out in run.parents:
-        raise ValueError("Export directory must be separate from the analysis run")
+        raise ValueError('Export directory must be separate from the analysis run')
     if out.exists():
-        raise FileExistsError("Use a new export directory; existing exports are preserved")
-    run_record = run_manifest.read(run)
-    for stage in ["association-prepare", "association-analyze", "center-consistency", "sensitivity"]:
-        record = run_record["stages"].get(stage, {})
-        if record.get("status") != "COMPLETE":
-            raise ValueError(f"Stage {stage} is not complete")
-    variant_status = run_record["stages"].get("variant-description", {}).get("status")
-    if variant_status not in (None, "COMPLETE"):
-        raise ValueError("Variant description was attempted but did not complete")
-    aggregates = [rel for rel in AGGREGATES if not rel.startswith("variant_description/") or variant_status == "COMPLETE"]
+        raise FileExistsError('Use a new export directory; existing exports are preserved')
+    record = run_manifest.read(run)
+    for stage in ['association-prepare', 'association-analyze', 'center-consistency', 'sensitivity']:
+        if record['stages'].get(stage, {}).get('status') != 'COMPLETE':
+            raise ValueError(f'Stage {stage} is not complete')
+    variant_status = record['stages'].get('variant-description', {}).get('status')
+    if variant_status not in (None, 'COMPLETE'):
+        raise ValueError('Variant description was attempted but did not complete')
     frames = {}
-    for rel in aggregates:
-        p = run / rel
-        frames[rel] = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p, sep="\t", float_precision="round_trip")
+    for rel, columns in TABLE_COLUMNS.items():
+        if rel.startswith('reader/') or (rel.startswith('variant_description/') and variant_status != 'COMPLETE'):
+            continue
+        path = (run / rel).with_suffix('.parquet') if rel in PARQUET_TABLES else run / rel
+        frame = pd.read_parquet(path) if path.suffix == '.parquet' else pd.read_csv(path, sep='\t', float_precision='round_trip')
+        frames[rel] = select_columns(frame, columns)
         ensure_aggregate(frames[rel])
-    center_all = frames["center_consistency/CENTER_RESULTS.parquet"]
-    if len(center_all) != 19164 or center_all.duplicated(KEY + ["center_group"]).any():
-        raise ValueError("Expected the complete two-center comparison family")
-    overview = derive_overview(frames["association/conditional_associations.parquet"],
-                                   frames["sensitivity/CONTEXT_RESULTS.parquet"],
-                                   frames["center_consistency/FOCUS_45_CENTER_COMPARISON.parquet"])
-    ensure_aggregate(overview)
-    frames["center_consistency/FOCUS_45_CENTER_COMPARISON.parquet"] = add_center_directions(frames["center_consistency/FOCUS_45_CENTER_COMPARISON.parquet"])
+    centers = frames['center_consistency/CENTER_RESULTS.tsv']
+    if len(centers) != 19164 or centers.duplicated(KEY + ['center_group']).any():
+        raise ValueError('Expected the complete two-center comparison family')
+    frames['reader/FOCUS_45_OVERVIEW.tsv'] = derive_overview(frames['association/conditional_associations.tsv'], frames['sensitivity/CONTEXT_RESULTS.tsv'], frames['center_consistency/FOCUS_45_CENTER_COMPARISON.tsv'])
+    ensure_aggregate(frames['reader/FOCUS_45_OVERVIEW.tsv'])
+    documentation = readme(frames)
     out.mkdir(parents=True)
     inventory = []
-    for rel, frame in list(frames.items()) + [("reader/FOCUS_45_OVERVIEW.tsv", overview)]:
-        dest = out / Path(rel).with_suffix(".tsv")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_csv(dest, sep="\t", index=False)
-        inventory.append({"path": dest.relative_to(out).as_posix(), "rows": len(frame),
-                          "columns": {c: str(frame[c].dtype) for c in frame},
-                          "source": rel if rel in frames else "Derived from frozen aggregate columns; see exporter and README.md",
-                          "release_status": "candidate_pending_release_review"})
-    (out / "README.md").write_text(
-        "Mutation-context aggregate release candidate\n\n"
-        "Start with reader/FOCUS_45_OVERVIEW.tsv. The same tables can supply the versioned data release and manuscript supplement; do not recompute results for each.\n"
-        "The unit is one root/diagnosis/gene/subtype comparison, not one patient. subtype_pos/subtype_n and other_subtypes_pos/other_subtypes_n are unadjusted counts.\n"
-        "primary_* are local-CNV-conditioned results; combined_* additionally adjust for reported mutation density and sample type. OR and CI belong to their respective models. *_q_declared retain the frozen comparison family.\n"
-        "context_status is copied from the analysis: all checks supported, supported with an unestimable check, supported but not all checks significant, or no detected combined-model association. Missing effects are not zero.\n"
-        "Center status measures consistency inside the pooled discovery dataset, not independent replication. FOCUS_45_OVERVIEW joins association, sensitivity and centre results using the four comparison keys.\n"
-        "The three *_center_direction columns compare MSK and non-MSK log-OR signs: same, opposite or not_estimable. They do not imply statistical significance or agreement with the pooled estimate; use center_consistency_status for the pooled comparison.\n"
-        "Variant description is optional: 8 aggregate tables without it, 13 when completed.\n"
-        "Variants: frozen_evaluable and combined_informative are distinct populations; carriers and variant_observations are different denominators. Category carrier counts can overlap. No variant tests are fitted.\n"
-        "PROTEIN_CHANGE_COUNTS and POSITION_COUNTS contain rare aggregate cells, including counts of one. All files are publication candidates subject to the same release review, whether supplied as a data package or journal supplement.\n"
-        "No raw MAF, sample linkage, individual records, job cache or local-path configuration is included. selected_local_state_descriptive_counts and the local TCGA follow-up are not exported.\n"
-        "Methods accompany the versioned data release; operational rules are in the matching analysis code. The export inventory is recorded in the run-level mutation_manifest.json. Exporting does not authorize redistribution or create a public release.\n")
-    manifest = {"status": "AGGREGATE_EXPORT_COMPLETE_NOT_PUBLISHED", "statistics_refitted": False,
-                "variants_included": variant_status == "COMPLETE", "files": inventory}
+    for rel, frame in frames.items():
+        path = out / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(path, sep='\t', index=False)
+        inventory.append({'path': rel, 'rows': len(frame), 'columns': {c: str(frame[c].dtype) for c in frame}})
+    (out / 'README.md').write_text(documentation)
     data = run_manifest.read(run)
-    data["exports"] = {"output_dir": str(out), **manifest}
+    data['exports'] = {'output_dir': str(out), 'status': 'AGGREGATE_EXPORT_COMPLETE_NOT_PUBLISHED',
+                       'statistics_refitted': False, 'variants_included': variant_status == 'COMPLETE', 'files': inventory}
     run_manifest.write(run, data)
-    print(json.dumps({"status": manifest["status"], "tables": len(inventory), "output_dir": str(out)}, indent=2))
+    print(json.dumps({'status': data['exports']['status'], 'tables': len(inventory), 'output_dir': str(out)}, indent=2))

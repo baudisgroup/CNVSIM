@@ -17,7 +17,7 @@ from statsmodels.stats.multitest import multipletests
 from . import association as h
 from .cache import read_jobs, write_jobs
 HERE = PRIOR = None
-KEY=['root','ONCOTREE_CODE','gene','subtype']
+from .table_schema import KEY, SENSITIVITY_COLUMNS, normalize_model_columns, select_columns
 NAMES=['matched_baseline','density_only','type_only','combined','amplitude','quadratic','restricted']
 
 
@@ -75,38 +75,32 @@ def process(job):
     z=job['frame'];knots=np.quantile(z.cnv_fraction,[.05,.35,.65,.95]);output=[]
     complete=z[z.SAMPLE_TYPE.isin(['Primary','Metastasis'])].dropna(subset=['gain','loss','leave_gene_out_density'])
     restricted=complete[complete.leave_gene_out_density.lt(20)&~complete.other_mmr_polymerase_call]
-    for old in job['rows']:
-        row={k:old[k] for k in KEY};target=old['subtype'];nt=int(old['subtype_n']);nc=int(old['other_subtypes_n'])
-        row.update(pooled_robust=old['pooled_robust'],old_fga_status=old['fga_stratification_status'],old_panel_q=old['assay_exact_score_q_declared'],old_primary_or=old['old_primary_or'],original_target_n=nt,original_control_n=nc)
+    for comparison_row in job['rows']:
+        row={k:comparison_row[k] for k in KEY};target=comparison_row['target_subtype'];nt=int(comparison_row['target_n']);nc=int(comparison_row['control_n'])
+        row.update(in_focus_45=comparison_row['in_focus_45'], main_primary_or=comparison_row['main_primary_or'])
         for name in NAMES:
             row.update({name+'_status':'not_estimable',name+'_reason':'local_gene_not_encoded' if not job['available'] else 'insufficient_common_support',name+'_p':np.nan,name+'_or':np.nan})
         for label,f in [('all',z),('complete',complete),('restricted',restricted)]:
             target_mask=f.assigned_reference_key.eq(target)
-            row[label+'_target_n']=int(target_mask.sum());row[label+'_control_n']=int((~target_mask).sum())
-            row[label+'_target_pos']=int(f.loc[target_mask,'positive'].sum());row[label+'_control_pos']=int(f.loc[~target_mask,'positive'].sum())
-        row['complete_target_retention']=row['complete_target_n']/nt
-        row['complete_control_retention']=row['complete_control_n']/nc
-        row['sample_type_excluded_target_n']=int((z.assigned_reference_key.eq(target)&~z.SAMPLE_TYPE.isin(['Primary','Metastasis'])).sum())
-        row['sample_type_excluded_control_n']=int((z.assigned_reference_key.ne(target)&~z.SAMPLE_TYPE.isin(['Primary','Metastasis'])).sum())
+            prefix = '' if label == 'all' else label + '_'
+            row[prefix+'target_n']=int(target_mask.sum());row[prefix+'control_n']=int((~target_mask).sum())
+            row[prefix+'target_mutated']=int(f.loc[target_mask,'positive'].sum());row[prefix+'control_mutated']=int(f.loc[~target_mask,'positive'].sum())
         row['local_cnv_missing_n']=int(z[['gain','loss']].isna().any(axis=1).sum())
         if job['available'] and len(complete):
             base,info,_=h.exact_result(complete,target,'binary')
-            row.update({'support_'+k:v for k,v in base.items()})
             if h.support(base,nt):
                 active=complete.iloc[np.flatnonzero(info)]
                 for name in NAMES[:-1]:
                     if name=='amplitude':
                         amp,_,_=h.exact_result(active,target,'amplitude')
-                        row.update({'amplitude_support_'+k:v for k,v in amp.items()})
                         if not h.support(amp,nt):
                             row['amplitude_reason']='amplitude_common_support_insufficient';continue
                     result=fit(active,target,knots,name)
-                    row.update({name+'_'+('or' if k=='or_' else k):v for k,v in result.items()})
+                    row.update({name+'_'+('or' if k=='or_' else k):v for k,v in result.items() if k not in ('rank','lr')})
             if len(restricted):
                 restr,inf,_=h.exact_result(restricted,target,'binary')
-                row.update({'restricted_support_'+k:v for k,v in restr.items()})
                 if h.support(restr,nt):
-                    row.update({'restricted_'+('or' if k=='or_' else k):v for k,v in fit(restricted.iloc[np.flatnonzero(inf)],target,knots,'restricted').items()})
+                    row.update({'restricted_'+('or' if k=='or_' else k):v for k,v in fit(restricted.iloc[np.flatnonzero(inf)],target,knots,'restricted').items() if k not in ('rank','lr')})
         output.append(row)
     return output
 
@@ -133,7 +127,7 @@ def prepare():
     # Counts above are sufficient; release raw MAF rows before loading sample caches.
     del v, parts, chunk, mask
     gc.collect()
-    old=pd.read_parquet(paths['pooled']).set_index(KEY);jobs=read_jobs(paths['jobs']);unique=[]
+    main_results=pd.read_parquet(paths['pooled']).set_index(KEY);jobs=read_jobs(paths['jobs']);unique=[]
     for job in jobs:
         z=job['frame'];gene=job['gene'];own=by_gene.loc[gene] if gene in by_gene.index.get_level_values(0) else pd.Series(dtype=float)
         all_count=z.sample_id.map(total).fillna(0).astype(int);own_count=z.sample_id.map(own).fillna(0).astype(int)
@@ -148,7 +142,7 @@ def prepare():
         z['SAMPLE_TYPE']=z.analysis_id.map(meta.SAMPLE_TYPE)
         z['SAMPLE_TYPE_DETAILED']=z.analysis_id.map(meta.SAMPLE_TYPE_DETAILED)
         for row in job['rows']:
-            orig=old.loc[tuple(row[k] for k in KEY)];row['pooled_robust']=orig.residual_status=='robust_residual_association';row['old_primary_or']=orig.primary_or
+            orig=main_results.loc[tuple(row[k] for k in KEY)];row['in_focus_45']=orig.association_status=='robust_residual_association';row['main_primary_or']=orig.primary_or
         unique.append(z[['analysis_id','SAMPLE_TYPE','SAMPLE_TYPE_DETAILED','full_reported_density','assay_exonic_mb']])
     u=pd.concat(unique).drop_duplicates('analysis_id')
     u.groupby(['SAMPLE_TYPE','SAMPLE_TYPE_DETAILED'],dropna=False).size().rename('unique_analyses').reset_index().to_csv(HERE/'sample_type_coverage.tsv',sep='\t',index=False)
@@ -158,30 +152,43 @@ def prepare():
     return jobs
 
 
+def classify_sensitivity(row):
+    """Classify current fits, including agreement with the main-model direction."""
+    checks = ['combined', 'amplitude', 'quadratic', 'restricted']
+    if row['combined_status'] != 'estimable':
+        return 'not_estimable'
+    if not row['combined_q'] < .05:
+        return 'no_detected_adjusted_association'
+    main_or, combined_or = row['main_primary_or'], row['combined_or']
+    if not (np.isfinite(main_or) and main_or > 0 and np.isfinite(combined_or) and combined_or > 0):
+        return 'direction_not_estimable'
+    if np.sign(np.log(main_or)) != np.sign(np.log(combined_or)):
+        return 'direction_inconsistent'
+    if any(row[n+'_status'] != 'estimable' for n in checks[1:]):
+        return 'supported_with_unestimable_sensitivity'
+    if not all(row[n+'_q'] < .05 for n in checks):
+        return 'supported_but_not_all_sensitivities'
+    if not all(np.isfinite(row[n+'_or']) and row[n+'_or'] > 0 for n in checks):
+        return 'direction_not_estimable'
+    if len(set(np.sign(np.log(row[n+'_or'])) for n in checks)) > 1:
+        return 'direction_inconsistent'
+    return 'supported_across_context_checks'
+
+
 def summarize(df):
     for name in NAMES:
-        valid=df[name+'_status'].eq('estimable')&np.isfinite(df[name+'_p'])
-        df[name+'_q_declared']=multipletests(df[name+'_p'].where(valid,1),method='fdr_bh')[1]
-        df[name+'_significant']=valid&df[name+'_q_declared'].lt(.05)
-    labels=[];checks=['combined','amplitude','quadratic','restricted']
-    for r in df.to_dict('records'):
-        if r['combined_status']!='estimable':label='not_estimable'
-        elif not r['combined_significant']:label='no_detected_adjusted_association'
-        elif any(r[n+'_status']!='estimable' for n in checks[1:]):label='supported_with_unestimable_sensitivity'
-        elif not all(r[n+'_significant'] for n in checks):label='supported_but_not_all_sensitivities'
-        elif not all(np.isfinite(r[n+'_or']) and r[n+'_or']>0 for n in checks):label='direction_not_estimable'
-        elif len(set(np.sign(np.log(r[n+'_or'])) for n in checks))>1:label='direction_inconsistent'
-        else:label='supported_across_context_checks'
-        labels.append(label)
-    df['context_status']=labels
+        valid=df[name+'_status'].eq('estimable') & np.isfinite(df[name+'_p'])
+        df[name+'_q']=multipletests(df[name+'_p'].where(valid,1),method='fdr_bh')[1]
+    df['sensitivity_status']=[classify_sensitivity(row) for row in df.to_dict('records')]
+    df = select_columns(normalize_model_columns(df, NAMES), SENSITIVITY_COLUMNS)
     df.to_parquet(HERE/'CONTEXT_RESULTS.parquet',index=False);df.to_csv(HERE/'CONTEXT_RESULTS.tsv',sep='\t',index=False)
-    focus=df[df.pooled_robust]
+    focus=df[df.in_focus_45]
     def counts(g):
-        return {'comparisons':len(g),'context_status':g.context_status.value_counts().to_dict(),
-                'checks':{n:{'estimable':int(g[n+'_status'].eq('estimable').sum()),'significant':int(g[n+'_significant'].sum()),'failure_reasons':g.loc[g[n+'_status'].ne('estimable'),n+'_reason'].value_counts().to_dict()} for n in NAMES}}
-    summary={'all':counts(df),'prior45':counts(focus),'prior71':counts(df[df.old_fga_status.eq('retained_after_fga_stratification')]),'prior512':counts(df[df.old_panel_q.lt(.05)]),'other_than_prior45':counts(df[~df.pooled_robust])}
-    for name,g in [('prior45',focus),('all_supported',df[df.context_status.eq('supported_across_context_checks')]),('prior45_supported',focus[focus.context_status.eq('supported_across_context_checks')])]:
-        summary[name+'_pan_cancer']={'comparisons':len(g),'subtypes':int(g.subtype.nunique()),'roots':int(g.root.nunique()),'genes':int(g.gene.nunique()),'root_counts':g.root.value_counts().to_dict(),'TP53_comparisons':int(g.gene.eq('TP53').sum())}
+        return {'comparisons':len(g),'sensitivity_status':g.sensitivity_status.value_counts().to_dict(),
+                'checks':{n:{'estimable':int(g[n+'_status'].eq('estimable').sum()),'significant':int((g[n+'_status'].eq('estimable') & g[n+'_q'].lt(.05)).sum()),'failure_reasons':g.loc[g[n+'_status'].ne('estimable'),n+'_reason'].value_counts().to_dict()} for n in NAMES}}
+    summary={'all':counts(df),'focus_45':counts(focus),'outside_focus_45':counts(df[~df.in_focus_45])}
+    for name,g in [('focus_45',focus),('all_supported',df[df.sensitivity_status.eq('supported_across_context_checks')]),('focus_45_supported',focus[focus.sensitivity_status.eq('supported_across_context_checks')])]:
+        summary[name+'_pan_cancer']={'comparisons':len(g),'subtypes':int(g.target_subtype.nunique()),'roots':int(g.root.nunique()),'genes':int(g.gene.nunique()),'root_counts':g.root.value_counts().to_dict(),'TP53_comparisons':int(g.gene.eq('TP53').sum())}
     h.save_record(HERE, 'SUMMARY',summary)
     return summary
 
@@ -193,7 +200,7 @@ def run(workers):
         for i,records in enumerate((pool.map(process, jobs, chunksize=1) if pool is not None else map(process, jobs)),1):
             rows.extend(records)
             if i%100==0 or i==len(jobs):print(f'PROGRESS {i}/{len(jobs)}; {len(rows)}/9582',flush=True)
-    df=pd.DataFrame(rows);assert len(df)==9582 and int(df.pooled_robust.sum())==45
+    df=pd.DataFrame(rows);assert len(df)==9582 and int(df.in_focus_45.sum())==45
     summary=summarize(df)
     h.save_record(HERE, 'COMPLETE',{'utc':datetime.now(timezone.utc).isoformat(),'comparisons':len(df)})
-    print(json.dumps({'prior45':summary['prior45'],'prior45_supported_pan_cancer':summary['prior45_supported_pan_cancer']},indent=2),flush=True)
+    print(json.dumps({'focus_45':summary['focus_45'],'focus_45_supported_pan_cancer':summary['focus_45_supported_pan_cancer']},indent=2),flush=True)
