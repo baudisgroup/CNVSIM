@@ -8,7 +8,7 @@ import sys
 import pandas as pd
 import pyarrow.parquet as pq
 
-from . import local_cnv, center, context, variants, manifest
+from . import association, center_consistency, sensitivity, variant_description, manifest
 
 
 def configure(files):
@@ -18,11 +18,11 @@ def configure(files):
         if key != "output_dir" and (out == path or out in path.parents or path in out.parents):
             raise ValueError(f"Output overlaps input {key}")
     for attr, key in {"RAW": "genie_maf", "SAMPLES": "genie_samples", "COVERAGE": "assay_coverage", "ANALYSIS_CONFIG": "analysis_config", "CONTRASTS": "contrasts", "SHAPE": "shape", "FEATURES": "features_dir"}.items():
-        setattr(local_cnv, attr, files[key])
-    for name, mod in [("local_cnv", local_cnv), ("center", center), ("context", context), ("variants", variants)]:
+        setattr(association, attr, files[key])
+    for name, mod in [("association", association), ("center_consistency", center_consistency), ("sensitivity", sensitivity), ("variant_description", variant_description)]:
         mod.HERE = out / name
-    center.PRIOR = context.PRIOR = local_cnv.HERE
-    variants.PRIOR = context.HERE
+    center_consistency.PRIOR = sensitivity.PRIOR = association.HERE
+    variant_description.PRIOR = sensitivity.HERE
     return files
 
 
@@ -70,7 +70,7 @@ def initialize(files):
     with manifest.exclusive_run(out):
         if any(p.name != ".mutation.lock" for p in out.iterdir()):
             raise FileExistsError("Run was initialized by another process")
-        data = {"schema_version": 2, "created_utc": datetime.now(timezone.utc).isoformat(),
+        data = {"schema_version": 3, "created_utc": datetime.now(timezone.utc).isoformat(),
                 "inputs": {k: str(v) for k, v in files.items()},
                 "environment": _environment(), "stages": {"check-inputs": {"status": "COMPLETE", "check": check}},
                 "records": {}, "exports": {}}
@@ -88,43 +88,43 @@ def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
             raise RuntimeError("An earlier stage is still marked RUNNING; inspect it before proceeding")
         if stage in data["stages"]:
             raise FileExistsError("Stage already attempted; preserve its record and use a fresh run")
-        dependencies = {"local-prepare": ["check-inputs"], "local-analyze": ["local-prepare"],
-                        "center": ["local-analyze"], "context": ["local-analyze"], "variants": ["context"],
-                        "export-tables": ["local-analyze", "center", "context"]}
+        dependencies = {"association-prepare": ["check-inputs"], "association-analyze": ["association-prepare"],
+                        "center-consistency": ["association-analyze"], "sensitivity": ["association-analyze"], "variant-description": ["sensitivity"],
+                        "export-tables": ["association-analyze", "center-consistency", "sensitivity"]}
         for required in dependencies[stage]:
             if data["stages"].get(required, {}).get("status") != "COMPLETE":
                 raise ValueError(f"Complete {required} first")
         files = configure(data["inputs"])
         if files["output_dir"] != run:
             raise ValueError("Run directory differs from its manifest")
-        if stage == "variants":
+        if stage == "variant-description":
             if protein_fasta_dir is None:
-                raise ValueError("variants requires --protein-fasta-dir")
-            variants.FASTA_DIR = Path(protein_fasta_dir).expanduser().resolve()
-            if run == variants.FASTA_DIR or run in variants.FASTA_DIR.parents or variants.FASTA_DIR in run.parents:
+                raise ValueError("variant_description requires --protein-fasta-dir")
+            variant_description.FASTA_DIR = Path(protein_fasta_dir).expanduser().resolve()
+            if run == variant_description.FASTA_DIR or run in variant_description.FASTA_DIR.parents or variant_description.FASTA_DIR in run.parents:
                 raise ValueError("Protein inputs overlap the run directory")
-            for accession, *_ in variants.REF.values():
-                path = variants.FASTA_DIR / (accession + ".fasta")
+            for accession, *_ in variant_description.REF.values():
+                path = variant_description.FASTA_DIR / (accession + ".fasta")
                 if not path.is_file():
                     raise FileNotFoundError(path)
         elif protein_fasta_dir is not None:
-            raise ValueError("Protein FASTA is used only by variants")
+            raise ValueError("Protein FASTA is used only by variant_description")
         if stage != "export-tables":
-            folder = run / ("local_cnv" if stage.startswith("local-") else stage)
-            if stage != "local-analyze":
+            folder = run / ("association" if stage.startswith("association-") else stage.replace("-", "_"))
+            if stage != "association-analyze":
                 folder.mkdir(exist_ok=False)
         manifest.set_stage(run, stage, "RUNNING")
         try:
-            if stage == "local-prepare":
-                local_cnv.prepare()
-            elif stage == "local-analyze":
-                local_cnv.analyze(workers)
-            elif stage == "center":
-                center.run(workers)
-            elif stage == "context":
-                context.run(workers)
-            elif stage == "variants":
-                variants.main(refresh=True)
+            if stage == "association-prepare":
+                association.prepare()
+            elif stage == "association-analyze":
+                association.analyze(workers)
+            elif stage == "center-consistency":
+                center_consistency.run(workers)
+            elif stage == "sensitivity":
+                sensitivity.run(workers)
+            elif stage == "variant-description":
+                variant_description.main(refresh=True)
             elif stage == "export-tables":
                 from .export import export_tables
                 export_tables(run, export_dir)

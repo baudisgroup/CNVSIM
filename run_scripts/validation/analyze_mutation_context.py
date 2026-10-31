@@ -11,11 +11,14 @@ from pathlib import Path
 # Cite the AACR Project GENIE Consortium (Cancer Discovery, 2017) and release 17.0.
 
 
+STAGE_ALIASES = {'local-prepare': 'association-prepare', 'local-analyze': 'association-analyze', 'center': 'center-consistency', 'context': 'sensitivity', 'variants': 'variant-description'}
+
+
 def main():
     if not __debug__:
         raise SystemExit("Do not run mutation analyses with -O, -OO or PYTHONOPTIMIZE; scientific consistency checks require assertions.")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["check-inputs", "local-prepare", "local-analyze", "center", "context", "variants", "export-tables"])
+    parser.add_argument("stage", choices=["check-inputs", "association-prepare", "association-analyze", "center-consistency", "sensitivity", "variant-description", "export-tables", *STAGE_ALIASES])
     parser.add_argument("--run-dir", type=Path, help="Initialized run directory (all stages after check-inputs)")
     parser.add_argument("--out-dir", type=Path, help="New run directory for check-inputs, or new export directory for export-tables")
     parser.add_argument("--genie-maf", type=Path)
@@ -23,9 +26,10 @@ def main():
     parser.add_argument("--contrasts", type=Path)
     parser.add_argument("--shape", type=Path)
     parser.add_argument("--features-dir", type=Path)
-    parser.add_argument("--protein-fasta-dir", type=Path, help="Required only for optional variants description; not an association-analysis input")
+    parser.add_argument("--protein-fasta-dir", type=Path, help="Required only for optional variant-description; not an association-analysis input")
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
+    args.stage = STAGE_ALIASES.get(args.stage, args.stage)
     supplied = [args.genie_maf, args.prepared_dir, args.contrasts, args.shape, args.features_dir]
     if args.stage == "check-inputs":
         if not all(x is not None for x in supplied) or args.out_dir is None or args.run_dir is not None or args.protein_fasta_dir is not None:
@@ -41,8 +45,8 @@ def main():
         parser.error("After initialization, supply --run-dir instead of individual input paths")
     if (args.stage == "export-tables") != (args.out_dir is not None):
         parser.error("--out-dir is required only for check-inputs or export-tables")
-    if (args.stage == "variants") != (args.protein_fasta_dir is not None):
-        parser.error("--protein-fasta-dir is required only for variants")
+    if (args.stage == "variant-description") != (args.protein_fasta_dir is not None):
+        parser.error("--protein-fasta-dir is required only for variant-description")
     from cnvsim.validation.mutation_context.workflow import execute
     execute(args.stage, args.run_dir, args.workers, args.out_dir, args.protein_fasta_dir)
 

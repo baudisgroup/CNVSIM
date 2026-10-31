@@ -11,7 +11,7 @@ NAME = "mutation_manifest.json"
 
 def read(run):
     data = json.loads((Path(run) / NAME).read_text())
-    if data.get("schema_version") != 2:
+    if data.get("schema_version") != 3:
         raise ValueError("Unsupported mutation manifest version")
     return data
 

@@ -34,7 +34,7 @@ def _decode(value):
 
 
 def write_jobs(path, jobs):
-    """Store specimen-level data locally; callers bind the whole file's SHA256."""
+    """Store specimen-level data locally with row order and data types preserved."""
     path = Path(path)
     if not path.name.startswith("LOCAL_ONLY_"):
         raise ValueError("Specimen-level caches require a LOCAL_ONLY_ filename")
@@ -49,22 +49,36 @@ def write_jobs(path, jobs):
             "columns": list(job["frame"]),
             "n": len(job["frame"]),
         })
-    frames = pd.concat([j["frame"] for j in jobs], keys=range(len(jobs)), names=["__mutation_job__"])
-    buf = BytesIO()
-    frames.to_parquet(buf, index=True)
     # Exclusive creation protects a prior run; the stage retains failed artifacts.
     with path.open("xb") as handle:
         path.chmod(0o600)
         with zipfile.ZipFile(handle, "w", compression=zipfile.ZIP_STORED) as archive:
-            archive.writestr("metadata.json", json.dumps({"format": 1, "jobs": metadata}, allow_nan=False))
-            archive.writestr("frames.parquet", buf.getvalue())
+            archive.writestr("metadata.json", json.dumps({"format": 2, "jobs": metadata}, allow_nan=False))
+            # One group at a time avoids a second, concatenated specimen matrix.
+            for i, job in enumerate(jobs):
+                buf = BytesIO()
+                job["frame"].to_parquet(buf, index=True)
+                archive.writestr(f"frames/{i:06d}.parquet", buf.getvalue())
 
 
 def read_jobs(path):
     with zipfile.ZipFile(path) as archive:
+        metadata = json.loads(archive.read("metadata.json"))
+        if metadata.get("format") == 2:
+            expected = ['metadata.json'] + [f'frames/{i:06d}.parquet' for i in range(len(metadata['jobs']))]
+            if sorted(archive.namelist()) != sorted(expected):
+                raise ValueError("Unexpected local cache members")
+            jobs = []
+            for i, record in enumerate(metadata['jobs']):
+                frame = pd.read_parquet(BytesIO(archive.read(f'frames/{i:06d}.parquet')))
+                frame = frame.loc[:, record['columns']].astype(record['dtypes'])
+                frame.index.names = record['index_names']
+                if len(frame) != record['n']:
+                    raise ValueError("Local cache row count mismatch")
+                jobs.append(_decode(record['job']) | {'frame': frame})
+            return jobs
         if sorted(archive.namelist()) != ["frames.parquet", "metadata.json"]:
             raise ValueError("Unexpected local cache members")
-        metadata = json.loads(archive.read("metadata.json"))
         if metadata.get("format") != 1:
             raise ValueError("Unsupported local cache format")
         frames = pd.read_parquet(BytesIO(archive.read("frames.parquet")))

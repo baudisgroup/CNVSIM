@@ -1,6 +1,7 @@
 """Same-cohort center consistency; aggregate exports only."""
 from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ from scipy.stats import chi2
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 
-from . import local_cnv as h
+from . import association as h
 from .cache import read_jobs, write_jobs
 HERE = PRIOR = None
 KEY = ['root', 'ONCOTREE_CODE', 'gene', 'subtype']
@@ -119,7 +120,7 @@ def run(workers):
         raise FileExistsError('completed center results exist')
     paths = {'jobs':PRIOR/'LOCAL_ONLY_jobs.zip', 'pooled_results':PRIOR/'conditional_associations.parquet',
              'samples':h.SAMPLES}
-    gs = pd.read_parquet(paths['samples'])
+    gs = pd.read_parquet(paths['samples'], columns=['selected_patient_root','reference_layer','analysis_id','CENTER','SEQ_ASSAY_ID'])
     gs = gs[gs.selected_patient_root & gs.reference_layer.eq('core')].copy()
     assert gs.analysis_id.is_unique and gs.CENTER.notna().all()
     assert gs.groupby('SEQ_ASSAY_ID').CENTER.nunique().eq(1).all()
@@ -142,8 +143,8 @@ def run(workers):
     unique.groupby(['root','CENTER','center_group']).size().rename('unique_evaluable_analyses').reset_index().to_csv(HERE/'center_sample_counts.tsv', sep='\t', index=False)
     assert sum(len(j['rows']) for j in jobs)==9582
     out, interactions=[], []
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        for i,(rows,hets) in enumerate(pool.map(process,jobs,chunksize=1),1):
+    with (ProcessPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()) as pool:
+        for i,(rows,hets) in enumerate((pool.map(process, jobs, chunksize=1) if pool is not None else map(process, jobs)),1):
             out.extend(rows); interactions.extend(hets)
             if i%100==0 or i==len(jobs):
                 print(f'PROGRESS {i}/{len(jobs)} groups; {len(out)}/19164 center comparisons',flush=True)

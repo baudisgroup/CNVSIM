@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -331,13 +332,13 @@ def summarize(frame):
 
 def analyze(workers):
     if not has_record(HERE, 'PREPARED'):
-        raise ValueError('Run local-prepare first')
+        raise ValueError('Run association-prepare first')
     if (HERE / 'conditional_associations.parquet').exists():
         raise FileExistsError('completed results already exist')
     jobs = read_jobs(HERE / 'LOCAL_ONLY_jobs.zip')
     records = []
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        for i, rows in enumerate(pool.map(process_job, jobs, chunksize=1), 1):
+    with (ProcessPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()) as pool:
+        for i, rows in enumerate((pool.map(process_job, jobs, chunksize=1) if pool is not None else map(process_job, jobs)), 1):
             records.extend(rows)
             if i % 100 == 0 or i == len(jobs):
                 print(f'PROGRESS {i}/{len(jobs)} groups, {len(records)}/9582 comparisons', flush=True)

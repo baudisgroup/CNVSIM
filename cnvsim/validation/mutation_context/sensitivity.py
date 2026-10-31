@@ -1,8 +1,10 @@
 """Prespecified exploratory density and sampling-type sensitivity."""
 from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
+import gc
 from pathlib import Path
 import warnings
 import numpy as np
@@ -12,7 +14,7 @@ from scipy.stats import chi2
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 
-from . import local_cnv as h
+from . import association as h
 from .cache import read_jobs, write_jobs
 HERE = PRIOR = None
 KEY=['root','ONCOTREE_CODE','gene','subtype']
@@ -112,7 +114,7 @@ def process(job):
 def prepare():
     paths={'jobs':PRIOR/'LOCAL_ONLY_jobs.zip','pooled':PRIOR/'conditional_associations.parquet',
            'samples':h.SAMPLES,'coverage':h.COVERAGE,'config':h.ANALYSIS_CONFIG,'raw_maf':h.RAW}
-    cfg=json.loads(paths['config'].read_text());gs=pd.read_parquet(paths['samples'])
+    cfg=json.loads(paths['config'].read_text());gs=pd.read_parquet(paths['samples'], columns=['selected_patient_root','reference_layer','analysis_id','sample_id','SAMPLE_TYPE','SAMPLE_TYPE_DETAILED'])
     gs=gs[gs.selected_patient_root&gs.reference_layer.eq('core')];assert gs.analysis_id.is_unique and gs.sample_id.is_unique
     meta=gs.set_index('analysis_id');keep=set(gs.sample_id)
     coverage=pd.read_parquet(paths['coverage'])
@@ -127,6 +129,10 @@ def prepare():
     v=pd.concat(parts).drop_duplicates(dedup);total=v.groupby('Tumor_Sample_Barcode').size();by_gene=v.groupby(['Hugo_Symbol','Tumor_Sample_Barcode']).size()
     mmr=v[v.Hugo_Symbol.isin(cfg['mmr_polymerase_genes'])][['Tumor_Sample_Barcode','Hugo_Symbol']].drop_duplicates()
     mmr_count=mmr.groupby('Tumor_Sample_Barcode').size()
+    qualifying_count = len(v)
+    # Counts above are sufficient; release raw MAF rows before loading sample caches.
+    del v, parts, chunk, mask
+    gc.collect()
     old=pd.read_parquet(paths['pooled']).set_index(KEY);jobs=read_jobs(paths['jobs']);unique=[]
     for job in jobs:
         z=job['frame'];gene=job['gene'];own=by_gene.loc[gene] if gene in by_gene.index.get_level_values(0) else pd.Series(dtype=float)
@@ -146,7 +152,7 @@ def prepare():
         unique.append(z[['analysis_id','SAMPLE_TYPE','SAMPLE_TYPE_DETAILED','full_reported_density','assay_exonic_mb']])
     u=pd.concat(unique).drop_duplicates('analysis_id')
     u.groupby(['SAMPLE_TYPE','SAMPLE_TYPE_DETAILED'],dropna=False).size().rename('unique_analyses').reset_index().to_csv(HERE/'sample_type_coverage.tsv',sep='\t',index=False)
-    h.save_record(HERE, 'PREPARED',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':len(v),'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'inference_not_started':True})
+    h.save_record(HERE, 'PREPARED',{'raw_rows_read':raw_n,'qualifying_deduplicated_records_selected_core':qualifying_count,'unique_evaluable_analyses':len(u),'sample_type_counts':u.SAMPLE_TYPE.fillna('missing').value_counts().to_dict(),'all_gene_positivity_reproduced':True,'inference_not_started':True})
     write_jobs(HERE/'LOCAL_ONLY_jobs.zip', jobs)
     print('PREPARED all9582; target-gene positivity reproduced',flush=True)
     return jobs
@@ -169,14 +175,13 @@ def summarize(df):
         labels.append(label)
     df['context_status']=labels
     df.to_parquet(HERE/'CONTEXT_RESULTS.parquet',index=False);df.to_csv(HERE/'CONTEXT_RESULTS.tsv',sep='\t',index=False)
-    focus=df[df.pooled_robust];focus.to_csv(HERE/'FOCUS_45_CONTEXT_COMPARISON.tsv',sep='\t',index=False)
+    focus=df[df.pooled_robust]
     def counts(g):
         return {'comparisons':len(g),'context_status':g.context_status.value_counts().to_dict(),
                 'checks':{n:{'estimable':int(g[n+'_status'].eq('estimable').sum()),'significant':int(g[n+'_significant'].sum()),'failure_reasons':g.loc[g[n+'_status'].ne('estimable'),n+'_reason'].value_counts().to_dict()} for n in NAMES}}
     summary={'all':counts(df),'prior45':counts(focus),'prior71':counts(df[df.old_fga_status.eq('retained_after_fga_stratification')]),'prior512':counts(df[df.old_panel_q.lt(.05)]),'other_than_prior45':counts(df[~df.pooled_robust])}
     for name,g in [('prior45',focus),('all_supported',df[df.context_status.eq('supported_across_context_checks')]),('prior45_supported',focus[focus.context_status.eq('supported_across_context_checks')])]:
         summary[name+'_pan_cancer']={'comparisons':len(g),'subtypes':int(g.subtype.nunique()),'roots':int(g.root.nunique()),'genes':int(g.gene.nunique()),'root_counts':g.root.value_counts().to_dict(),'TP53_comparisons':int(g.gene.eq('TP53').sum())}
-        g.groupby('gene').agg(comparisons=('root','size'),roots=('root','nunique'),root_list=('root',lambda x:','.join(sorted(set(x)))),subtypes=('subtype','nunique')).sort_values(['roots','comparisons'],ascending=False).to_csv(HERE/(name+'_gene_root_summary.tsv'),sep='\t')
     h.save_record(HERE, 'SUMMARY',summary)
     return summary
 
@@ -184,8 +189,8 @@ def summarize(df):
 def run(workers):
     if (HERE/'CONTEXT_RESULTS.parquet').exists():raise FileExistsError('completed results exist')
     jobs=prepare();rows=[]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        for i,records in enumerate(pool.map(process,jobs,chunksize=1),1):
+    with (ProcessPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()) as pool:
+        for i,records in enumerate((pool.map(process, jobs, chunksize=1) if pool is not None else map(process, jobs)),1):
             rows.extend(records)
             if i%100==0 or i==len(jobs):print(f'PROGRESS {i}/{len(jobs)}; {len(rows)}/9582',flush=True)
     df=pd.DataFrame(rows);assert len(df)==9582 and int(df.pooled_robust.sum())==45
