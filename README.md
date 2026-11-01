@@ -2,9 +2,9 @@
 
 CNVSIM is a pan-cancer reference atlas of recurrent copy-number variation
 (CNV) patterns and a Python workflow for assigning new CNV profiles to
-calibrated cancer-specific subtypes. Version 1.0.0 contains 204,587 neoplastic
+calibrated cancer-specific subtypes. Version 1.0.1 contains 204,587 neoplastic
 analyses across 19 cancer-root spaces, comprising 103 core subtypes and 9
-conditional subtypes.
+conditional subtypes, together with tumour mutation-context summaries.
 
 Panel A below summarizes atlas construction: gene-level CNV profiles are
 represented in root-specific comparison spaces, partitioned into candidate
@@ -15,11 +15,15 @@ are transformed into the appropriate root-specific reference space, evaluated
 first against core subtypes and, when needed, against an eligible conditional
 layer, and linked to their nearest reference neoplastic analyses.
 
-Building on this frozen reference, the public workflows support two main use
-cases:
+Building on this frozen reference, the public workflows support three main
+application use cases:
 
 - project a CNV profile from a new neoplastic sample or cell line into the
   frozen CNVSIM atlas;
+- run an integrated reference-context query that projects new CNV profiles and
+  retrieves the matched reference subtype cohort, subtype CNV signatures,
+  ranked Cellosaurus cell-line candidates with multi-profile signature evidence,
+  and within-diagnosis tumour mutation-context associations;
 - query ranked Cellosaurus cell lines for a CNVSIM subtype, or identify the
   matched reference subtype, derived from neoplastic samples, for a specified
   cell line.
@@ -39,18 +43,27 @@ cases:
 This repository contains the CNVSIM source code, configuration files,
 validation workflows, and manuscript figure runners. The frozen atlas,
 projection bundle, validation summaries, source data, and cell-line catalogue
-are distributed separately as the **CNVSIM Atlas v1.0.0 data release**.
+are distributed separately as the **CNVSIM Atlas data release**:
 
 - Code: <https://github.com/baudisgroup/CNVSIM>
-- Data release: <https://doi.org/10.5281/zenodo.23642834>
+- Published v1.0.0 data release: <https://doi.org/10.5281/zenodo.23642834>
+- Local v1.0.1 candidate data release (`CNVSIM_v1.0.1_public`): adds
+  `cell_line/signature_evidence/`, `validation/mutation_context/`,
+  `validation/source_holdout/`, and updated `supplementary/` files.
 
-After downloading and extracting the data release, define its location:
+After extracting the data release, define its location:
 
 ```bash
-export CNVSIM_DATA=/path/to/CNVSIM_v1.0.0_public
+export CNVSIM_DATA=/path/to/CNVSIM_v1.0.1_public
 ```
 
-The data release includes its own README with an embedded data dictionary and manifests.
+Standalone projection (`run_scripts/project_samples.py`) and direct Cellosaurus
+catalogue queries (`run_scripts/applications/query_experimental_models.py`) also
+work with `CNVSIM_v1.0.0_public`. The integrated reference-context query
+(`run_scripts/applications/query_reference_context.py`) uses the v1.0.1
+candidate release when cell-line signature evidence and tumour mutation-context
+tables are requested. The data release includes its own `README.md` with a
+complete data dictionary and manifests.
 
 ## Installation
 
@@ -153,6 +166,84 @@ has an eligible conditional reference. The complete subtype catalogue and its
 enriched Track 1 chromosome-scale and Track 2 gene-level signatures are
 available under `atlas/` in the data release.
 
+## Query integrated reference context
+
+To project new CNV profiles and retrieve their matched reference cohort,
+subtype CNV signatures, candidate Cellosaurus cell lines with multi-profile
+signature evidence, and tumour mutation-context associations in a single step,
+use `run_scripts/applications/query_reference_context.py`:
+
+```bash
+python run_scripts/applications/query_reference_context.py \
+  --release-dir "$CNVSIM_DATA" \
+  --samples /path/to/samples.tsv \
+  --segments /path/to/segments.tsv \
+  --out-dir /path/to/query_results \
+  --nearest 5 \
+  --top-models 5
+```
+
+`--out-dir` must be a new directory and must not overlap any input path. The
+script accepts the same `samples.tsv` and `segments.tsv` tables used by
+`project_samples.py` (automatically deriving `root` from `icdo_topography_id`
+or `icdot_root_grouped` when `root` is omitted). Optional columns in
+`samples.tsv` refine retrieval:
+
+- `oncotree_code`: filters the tumour mutation-context tables to an exact
+  OncoTree diagnosis code when supplied; if omitted, all available diagnoses for
+  the assigned subtype are returned.
+- `analysis_id`, `source_analysis_id`, `individual_id`: along with `sample_id`,
+  matching analysis or known individual identifiers in the released atlas are
+  excluded from the retrieved `reference_cohort.tsv` and
+  `nearest_reference_cases.tsv` (reference cohort entries are CNV analysis
+  profiles rather than deduplicated patients).
+- `model_id`: along with any cell-line `analysis_id` mapped in the catalogue,
+  the query's own Cellosaurus model is excluded from `model_candidates.tsv` and
+  `model_signature_evidence.tsv` for that cancer root and subtype. Neither
+  retrieval exclusion alters the frozen reference space or the projection
+  assignment itself.
+
+By default, cell-line signature evidence is read from
+`"$CNVSIM_DATA/cell_line/signature_evidence"` (`--model-signature-dir`) and
+tumour mutation context from `"$CNVSIM_DATA/validation/mutation_context"`
+(`--mutation-dir`). If either optional directory is absent, the query still
+completes projection, cohort retrieval, and model lookup and marks that context
+section as `unavailable` in the JSON report.
+
+### Reference-context query outputs
+
+Each sample directory always writes `report.json`; the TSV tables inside
+`query_<NNN>_<sample_id>/` are written only when `assignment_status` is
+`projected_assignment` (otherwise only `report.json` is written), and the four
+signature-evidence and mutation-context tables additionally require their
+corresponding optional release directories to be available.
+
+| Path | Contents |
+|---|---|
+| `reports.json` | Top-level summary listing `sample_id`, `assignment_status`, `assigned_reference_key`, and the relative path to each per-sample `report.json`. |
+| `projection/` | Standard projection outputs (`projection_assignments.tsv`, `projection_candidates.tsv`, `nearest_reference_samples.tsv`, `query_coordinates.parquet`, and `projection_manifest.json`). |
+| `query_<NNN>_<sample_id>/report.json` | Structured JSON report containing the query metadata, assignment support metrics, self-exclusion audit, cohort and model summaries, and table previews. |
+| `query_<NNN>_<sample_id>/reference_cohort.tsv` | Eligible defining neoplastic analyses of the assigned subtype after self-exclusion, ranked by distance in the stored reference space. |
+| `query_<NNN>_<sample_id>/nearest_reference_cases.tsv` | The top `--nearest` defining neoplastic analyses from `reference_cohort.tsv`. |
+| `query_<NNN>_<sample_id>/structural_signatures.tsv` | Released Track 1 chromosome-scale and Track 2 gene-level CNV signatures of the assigned subtype. |
+| `query_<NNN>_<sample_id>/model_candidates.tsv` | Matched Cellosaurus cell-line models for the assigned subtype after self-exclusion, ordered by published model rank. |
+| `query_<NNN>_<sample_id>/subtype_signature_coverage.tsv` | Subtype-wide cell-line coverage summary across all released CNV signatures (before query self-exclusion). |
+| `query_<NNN>_<sample_id>/model_signature_evidence.tsv` | Per-model multi-profile CNV signature evidence across eligible matched cell lines (after query self-exclusion). |
+| `query_<NNN>_<sample_id>/genie_mutation_context.tsv` | Within-diagnosis tumour mutation associations from AACR Project GENIE for the assigned subtype (filtered by `oncotree_code` when supplied). |
+| `query_<NNN>_<sample_id>/tcga_mutation_context.tsv` | Atlas-internal TCGA MC3 cross-cohort comparison rows for the same candidate gene set. |
+
+### Scope and interpretation boundaries
+
+- **Read-only lookup**: the query layer projects segments with the frozen bundle
+  and looks up published tables; it does not refit subtypes or run new
+  statistical tests.
+- **Cell-line signature evidence**: summarizes CNV profile records in the
+  released catalogue (`recorded`, `not_recorded`, `unknown`), not functional
+  dependency or cell-line sequence mutations.
+- **Tumour mutation context**: reports cohort-level tumour associations from
+  GENIE and TCGA for the assigned CNV subtype; it does not infer mutation calls
+  for the query sample or for any cell line.
+
 ## Retrieve and project a Progenetix example
 
 The test module can query projectable CNV analyses from neoplastic samples
@@ -166,7 +257,7 @@ flowchart LR
     api --> review["3. Select analyses<br/>candidates.tsv"]
     review --> variants["4. Retrieve selected CNVs<br/>g_variants"]
     variants --> inputs["5. Build inputs<br/>samples.tsv + segments.tsv"]
-    inputs --> output["6. Project to CNVSIM<br/>assignment + nearest references"]
+    inputs --> output["6. Query CNVSIM<br/>projection + reference context"]
 ```
 
 Start by listing candidate analyses; this example uses stomach topography and
@@ -194,7 +285,8 @@ options remain accepted; omitting the last flag does not disable expansion.
 Review `candidates.tsv` and enter `yes` in the `selected` column for one or
 more analyses. The overlap columns report whether an analysis is already part
 of the released atlas; they are informational and do not prevent projection.
-Convert the selected rows and run the standard projection interface:
+Convert the selected rows and run the integrated reference-context query (or
+the standalone projection interface):
 
 ```bash
 python tests/progenetix_retrieval_example/prepare_projection_inputs.py \
@@ -202,6 +294,19 @@ python tests/progenetix_retrieval_example/prepare_projection_inputs.py \
   --out-dir "$EXAMPLE_OUT/input" \
   --overwrite
 
+python run_scripts/applications/query_reference_context.py \
+  --release-dir "$CNVSIM_DATA" \
+  --samples "$EXAMPLE_OUT/input/samples.tsv" \
+  --segments "$EXAMPLE_OUT/input/segments.tsv" \
+  --out-dir "$EXAMPLE_OUT/query_results" \
+  --nearest 5 \
+  --top-models 5
+```
+
+If only subtype assignments and nearest reference analyses are needed, run
+`project_samples` directly:
+
+```bash
 python -m run_scripts.project_samples \
   --bundle-dir "$CNVSIM_DATA/projection_bundle" \
   --samples "$EXAMPLE_OUT/input/samples.tsv" \
@@ -252,10 +357,13 @@ stops only when no projectable CNV segment remains for a selected analysis.
 
 ### Projection tests
 
-Run the projection unit tests from the repository root:
+Run the projection and retrieval application unit tests from the repository root:
 
 ```bash
-CNVSIM_RELEASE_DIR="$CNVSIM_DATA" python -m unittest discover -s tests -v
+CNVSIM_RELEASE_DIR="$CNVSIM_DATA" python -m unittest \
+  tests.test_projection_cli \
+  tests.progenetix_retrieval_example.test_query_candidates \
+  tests.progenetix_retrieval_example.test_projection -v
 ```
 
 To also run the live Progenetix retrieval smoke test (retrieves three public analyses via the Beacon API and verifies core assignment, conditional routing, unresolved handling, and nearest-reference output):
@@ -302,16 +410,16 @@ distance to the matched subtype.
 
 | Path | Purpose |
 |---|---|
-| `cnvsim/` | Core preprocessing, atlas construction, projection, validation, and cell-line query modules. |
+| `cnvsim/` | Core preprocessing, atlas construction, projection, reference-context query, validation, and cell-line query modules. |
 | `configs/` | Analysis and validation configurations. |
-| `run_scripts/project_samples.py` | Projection entry point for new CNV segments. |
-| `run_scripts/applications/` | Cell-line resource query interface. |
+| `run_scripts/project_samples.py` | Standalone projection entry point for new CNV segments. |
+| `run_scripts/applications/` | Integrated reference-context query, Cellosaurus cell-line lookup, and model signature-evidence builders. |
 | `run_scripts/analysis/` | Atlas construction and reference-projection workflows. |
-| `run_scripts/validation/` | Core and conditional projection, signature-recovery, and segment-span validation runners. |
+| `run_scripts/validation/` | Projection, signature-recovery, segment-span, mutation-context, and source-holdout validation runners. |
 | `run_scripts/figures/` | Runners used to produce manuscript figures. |
 | `tests/progenetix_retrieval_example/` | Public bycon retrieval example and live projection smoke test. |
 
-Projection and cell-line query tools run directly on the data release; full atlas construction, validation, and figure runners also use intermediate analysis-workspace outputs.
+Projection, integrated reference-context query, and cell-line query tools run directly on the data release; full atlas construction, validation, and figure runners also use intermediate analysis-workspace outputs.
 
 ## External resources used by CNVSIM
 
@@ -340,6 +448,24 @@ Projection and cell-line query tools run directly on the data release; full atla
   COSMIC Cancer Gene Census: describing genetic dysfunction across all human
   cancers](https://doi.org/10.1038/s41568-018-0060-1). *Nat Rev Cancer*.
   2018;18:696–705.
+- **AACR Project GENIE** — source of clinical sequencing records (release
+  **17.0-public**) used for within-diagnosis somatic mutation association
+  analyses (`validation/mutation_context/` and Supplementary Table S5). The AACR
+  Project GENIE Consortium. [AACR Project GENIE: Powering Precision Medicine
+  Through an International Consortium](https://doi.org/10.1158/2159-8290.CD-17-0151).
+  *Cancer Discov*. 2017;7(8):818–831. Raw GENIE files are available through the
+  [GENIE portal](https://genie.synapse.org/) under the [17.0-public data-guide
+  terms](https://www.aacr.org/wp-content/uploads/2025/02/17.0-data_guide.pdf).
+- **The Cancer Genome Atlas (TCGA) MC3 somatic mutation calls** — source of the
+  Multi-Center Mutation Calling in Multiple Cancers (**MC3 v0.2.8**) public
+  exome mutation calls (`mc3.v0.2.8.PUBLIC.maf.gz`) used to evaluate the 45
+  GENIE mutation associations in TCGA participants
+  (`validation/mutation_context/tcga/tcga_mutation_comparisons.tsv` and
+  Supplementary Table S5). Ellrott K *et al.* [Scalable Open
+  Science Approach for Mutation Calling of Tumor Exomes Using Multiple Genomic
+  Pipelines](https://doi.org/10.1016/j.cels.2018.03.002). *Cell Syst*.
+  2018;6(3):271–281.e7. The results shown here are in whole or part based upon
+  data generated by the [TCGA Research Network](https://www.cancer.gov/tcga).
 
 ## License
 
