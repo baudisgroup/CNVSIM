@@ -20,7 +20,7 @@ from cnvsim.experimental_model_query import load_experimental_model_application
 from cnvsim.reference_query_context import (
     ModelSignatureContext, MutationContext, MUTATION_FILES, optional_context,
 )
-from cnvsim.projection import project_samples
+from cnvsim.projection import _canonical_samples, project_samples
 
 
 ACCEPTED_STATUS = "projected_assignment"
@@ -323,13 +323,14 @@ class ReferenceRelease:
 
 def _read_samples(samples_path: Path) -> pd.DataFrame:
     samples = pd.read_csv(samples_path, sep="\t", dtype=str, keep_default_na=False)
-    for column in ("sample_id", "root"):
-        if column not in samples.columns:
-            raise KeyError(f"samples.tsv requires {column}")
+    if "sample_id" not in samples.columns:
+        raise KeyError("samples.tsv requires sample_id")
     if samples.empty or samples["sample_id"].eq("").any():
         raise ValueError("samples.tsv requires nonempty sample IDs")
     if samples["sample_id"].duplicated().any():
         raise ValueError("samples.tsv sample IDs must be unique")
+    if "root" not in samples.columns:
+        samples = _canonical_samples(samples)
     return samples
 
 
