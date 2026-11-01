@@ -543,8 +543,8 @@ def build_cell_line_signature_evidence(release_dir: Path, out_dir: Path) -> dict
     local_dir.mkdir(mode=0o700)
     local_dir.chmod(0o700)
 
-    subtype_path = out_dir / "SUBTYPE_SIGNATURE_COVERAGE.tsv"
-    model_path = out_dir / "MODEL_SIGNATURE_EVIDENCE.tsv"
+    subtype_path = out_dir / "subtype_signature_coverage.tsv"
+    model_path = out_dir / "model_signature_evidence.tsv"
     subtype_path.write_text(public_texts[0], encoding="utf-8")
     model_path.write_text(public_texts[1], encoding="utf-8")
     (out_dir / "README.md").write_text(TABLE_GUIDE, encoding="utf-8")
@@ -678,7 +678,7 @@ This directory summarizes multi-profile copy-number variation (CNV) evidence acr
 
 ## Files
 
-### 1. `SUBTYPE_SIGNATURE_COVERAGE.tsv`
+### 1. `subtype_signature_coverage.tsv`
 
 One row per released signature event (`atlas/signature_events.tsv`). Subtypes without consensus-matched models (`all_matched_models = 0`) or without recommended evaluable models (`recommended_evaluable_models = 0`) retain their tumour signature statistics and have blank model fraction quartiles.
 
@@ -706,7 +706,7 @@ One row per released signature event (`atlas/signature_events.tsv`). Subtypes wi
 | `model_fraction_median` | Median of `fraction_median` across recommended evaluable models. Blank when `recommended_evaluable_models = 0`. |
 | `model_fraction_q75` | 75th percentile of `fraction_median` across recommended evaluable models. Blank when `recommended_evaluable_models = 0`. |
 
-### 2. `MODEL_SIGNATURE_EVIDENCE.tsv`
+### 2. `model_signature_evidence.tsv`
 
 One row per `(consensus-matched model, signature event)` pair using all profiles of that model within its root, including profiles assigned to other subtypes. Models without a signature-bearing consensus subtype have no event rows.
 

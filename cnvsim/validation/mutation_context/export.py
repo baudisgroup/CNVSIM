@@ -129,9 +129,15 @@ def export_tables(run_dir, out_dir):
         path = run / 'tcga/LOCAL_ONLY_results.parquet'
         frames['tcga/TCGA_MUTATION_COMPARISONS.tsv'] = comparison_table(pd.read_parquet(path))
         documentation += '\n\n' + tcga_readme()
+    # Retain historical run filenames above; normalize only public export names.
+    public_frames = {}
+    for rel, frame in frames.items():
+        public_rel = Path(rel).with_name(Path(rel).name.lower()).as_posix()
+        documentation = documentation.replace(rel, public_rel)
+        public_frames[public_rel] = frame
     out.mkdir(parents=True)
     inventory = []
-    for rel, frame in frames.items():
+    for rel, frame in public_frames.items():
         path = out / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         frame.to_csv(path, sep='\t', index=False)

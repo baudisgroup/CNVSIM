@@ -354,7 +354,7 @@ def run_reference_query(
     samples = _read_samples(Path(samples_path))
     release = ReferenceRelease(release_dir)
     signatures, signature_status = optional_context(
-        model_signature_dir, ["SUBTYPE_SIGNATURE_COVERAGE.tsv", "MODEL_SIGNATURE_EVIDENCE.tsv"],
+        model_signature_dir, ["subtype_signature_coverage.tsv", "model_signature_evidence.tsv"],
         ModelSignatureContext, release.signatures, release.models)
     mutations, mutation_status = optional_context(
         mutation_dir, MUTATION_FILES.values(), MutationContext, release.subtypes)

@@ -10,8 +10,8 @@ from cnvsim.model_signature_evidence import (
 
 MUTATION_KEYS = ["root", "diagnosis", "target_subtype", "gene"]
 MUTATION_FILES = {
-    "genie_mutation_context": "reader/FOCUS_45_OVERVIEW.tsv",
-    "tcga_mutation_context": "tcga/TCGA_MUTATION_COMPARISONS.tsv",
+    "genie_mutation_context": "reader/focus_45_overview.tsv",
+    "tcga_mutation_context": "tcga/tcga_mutation_comparisons.tsv",
 }
 COUNT_COLUMNS = {
     "tumour_context_n", "all_matched_models", "recommended_models", "recommended_evaluable_models",
@@ -22,6 +22,15 @@ COUNT_COLUMNS = {
     "tcga_target_participants", "tcga_target_mutation_carriers", "tcga_control_participants",
     "tcga_control_mutation_carriers",
 }
+
+
+def resolve_table(directory, filename):
+    """Prefer current lowercase names and accept legacy uppercase table names."""
+    path = Path(directory) / filename
+    if path.is_file():
+        return path
+    legacy = path.with_name(path.stem.upper() + path.suffix)
+    return legacy if legacy.is_file() else path
 
 
 def _read_table(path, required, keys):
@@ -43,9 +52,9 @@ class ModelSignatureContext:
 
     def __init__(self, directory, signatures, models):
         directory = Path(directory)
-        self.coverage = _read_table(directory / "SUBTYPE_SIGNATURE_COVERAGE.tsv",
+        self.coverage = _read_table(resolve_table(directory, "subtype_signature_coverage.tsv"),
                                     SUBTYPE_COVERAGE_COLUMNS, SIGNATURE_KEYS)
-        self.evidence = _read_table(directory / "MODEL_SIGNATURE_EVIDENCE.tsv",
+        self.evidence = _read_table(resolve_table(directory, "model_signature_evidence.tsv"),
                                     MODEL_EVIDENCE_COLUMNS, [*SIGNATURE_KEYS, "model_id"])
         expected = signatures.set_index(SIGNATURE_KEYS)
         observed = self.coverage.set_index(SIGNATURE_KEYS)
@@ -101,7 +110,7 @@ class MutationContext:
         }
         roots = subtypes.set_index("reference_key", verify_integrity=True).root
         for name, filename in MUTATION_FILES.items():
-            frame = _read_table(directory / filename, [*MUTATION_KEYS, *required[name]], MUTATION_KEYS)
+            frame = _read_table(resolve_table(directory, filename), [*MUTATION_KEYS, *required[name]], MUTATION_KEYS)
             if not frame.target_subtype.map(roots).eq(frame.root).all():
                 raise ValueError("Mutation subtype/root keys disagree with the atlas")
             self.tables[name] = frame
@@ -133,7 +142,7 @@ class MutationContext:
 def optional_context(directory, filenames, factory, *args):
     """Missing optional data is explicit; malformed supplied data raises."""
     directory = Path(directory)
-    missing = [name for name in filenames if not (directory / name).is_file()]
+    missing = [name for name in filenames if not resolve_table(directory, name).is_file()]
     if missing:
         return None, {"status": "unavailable", "missing_files": missing}
     return factory(directory, *args), {"status": "not_queried_assignment_not_accepted"}

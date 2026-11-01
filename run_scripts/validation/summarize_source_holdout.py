@@ -2,11 +2,11 @@
 """Summarize held-out TCGA projection coverage and compatibility with v1 assignments.
 
 Outputs (written to --out-dir):
-  SOURCE_HOLDOUT_COVERAGE_BY_ROOT.tsv       Roster counts, assigned/abstained counts, and v1 statuses.
-  SOURCE_HOLDOUT_STATUS_BY_ROOT.tsv         Projection status and reason breakdown by root.
-  SOURCE_HOLDOUT_COMPATIBILITY_BY_ROOT.tsv  Per-root ARI and AMI on commonly assigned samples.
-  SOURCE_HOLDOUT_CROSSTAB.tsv               Contingency counts between rebuilt contexts and v1 labels.
-  SOURCE_HOLDOUT_SUMMARY.json               Summary totals and input/output SHA-256 checksums.
+  source_holdout_coverage_by_root.tsv       Roster counts, assigned/abstained counts, and v1 statuses.
+  source_holdout_status_by_root.tsv         Projection status and reason breakdown by root.
+  source_holdout_compatibility_by_root.tsv  Per-root ARI and AMI on commonly assigned samples.
+  source_holdout_crosstab.tsv               Contingency counts between rebuilt contexts and v1 labels.
+  source_holdout_summary.json               Summary totals and input/output SHA-256 checksums.
 """
 
 from __future__ import annotations
@@ -149,10 +149,10 @@ def main(argv: list[str] | None = None) -> None:
                .groupby(["root", "outcome", "new_status", "reason"]).size().rename("n").reset_index())
     out.mkdir(parents=True, exist_ok=True)
     files = {
-        "SOURCE_HOLDOUT_COVERAGE_BY_ROOT.tsv": pd.DataFrame(cov_rows),
-        "SOURCE_HOLDOUT_STATUS_BY_ROOT.tsv": status,
-        "SOURCE_HOLDOUT_COMPATIBILITY_BY_ROOT.tsv": pd.DataFrame(comp_rows),
-        "SOURCE_HOLDOUT_CROSSTAB.tsv": (pd.concat(cross_parts, ignore_index=True) if cross_parts
+        "source_holdout_coverage_by_root.tsv": pd.DataFrame(cov_rows),
+        "source_holdout_status_by_root.tsv": status,
+        "source_holdout_compatibility_by_root.tsv": pd.DataFrame(comp_rows),
+        "source_holdout_crosstab.tsv": (pd.concat(cross_parts, ignore_index=True) if cross_parts
                             else pd.DataFrame(columns=["root", "new_context", "v1_label", "n"])),
     }
     for name, frame in files.items():
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> None:
                    "projections": proj_hashes},
         "outputs": {name: sha256_file(out / name) for name in files},
     }
-    (out / "SOURCE_HOLDOUT_SUMMARY.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (out / "source_holdout_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary["totals"], indent=2))
 
 
