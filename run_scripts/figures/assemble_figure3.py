@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Assemble the final Figure 3 from completed workflow and data panels."""
+"""Assemble the final Figure 3 from the confirmed A, B, and C panels."""
 
 import argparse
 from pathlib import Path
@@ -42,9 +42,7 @@ def _tight_crop(
 ) -> Image.Image:
     background = Image.new("RGB", image.size, WHITE)
     difference = ImageChops.difference(image, background).convert("L")
-    mask = difference.point(
-        lambda value: 255 if value > threshold else 0
-    )
+    mask = difference.point(lambda value: 255 if value > threshold else 0)
     bounds = mask.getbbox()
     if bounds is None:
         return image
@@ -76,34 +74,23 @@ def _resize_to_height(image: Image.Image, height: int) -> Image.Image:
 def _draw_panel_label(
     draw: ImageDraw.ImageDraw,
     label: str,
-    position: tuple[int, int],
+    x: int,
+    y: int,
     *,
     font: ImageFont.ImageFont,
 ) -> None:
-    x, y = position
-    bounds = draw.textbbox((x, y), label, font=font)
-    pad = max(4, round(getattr(font, "size", 24) * 0.08))
-    draw.rectangle(
-        (
-            bounds[0] - pad,
-            bounds[1] - pad,
-            bounds[2] + pad,
-            bounds[3] + pad,
-        ),
-        fill=WHITE,
-    )
     draw.text((x, y), label, font=font, fill=BLACK)
 
 
 def assemble_figure3(
-    workflow_path: Path,
-    stability_path: Path,
-    coverage_path: Path,
-    diagnostic_path: Path,
+    panel_a_path: Path,
+    panel_b_path: Path,
+    panel_c_path: Path,
     out_path: Path,
     *,
     content_width: int,
     outer_margin: int,
+    label_gutter: int,
     column_gap: int,
     row_gap: int,
     label_size: int,
@@ -115,64 +102,69 @@ def assemble_figure3(
     if out_path.exists() and not overwrite:
         raise FileExistsError(f"Output exists; pass --overwrite: {out_path}")
 
-    workflow = _tight_crop(_load_panel(workflow_path))
-    stability = _tight_crop(_load_panel(stability_path))
-    coverage = _tight_crop(_load_panel(coverage_path))
-    diagnostic = _tight_crop(_load_panel(diagnostic_path))
+    panel_a = _tight_crop(_load_panel(panel_a_path))
+    panel_b = _tight_crop(_load_panel(panel_b_path))
+    panel_c = _tight_crop(_load_panel(panel_c_path))
 
+    top_image_width = content_width - column_gap - 2 * label_gutter
+    if top_image_width <= 0:
+        raise ValueError("Layout leaves no width for the top-row panels")
     top_height = round(
-        (content_width - column_gap)
+        top_image_width
         / (
-            workflow.width / workflow.height
-            + stability.width / stability.height
+            panel_a.width / panel_a.height
+            + panel_c.width / panel_c.height
         )
     )
-    workflow = _resize_to_height(workflow, top_height)
-    stability = _resize_to_height(stability, top_height)
-    top_width = workflow.width + column_gap + stability.width
+    panel_a = _resize_to_height(panel_a, top_height)
+    panel_c = _resize_to_height(panel_c, top_height)
 
-    bottom_width = (content_width - column_gap) // 2
-    coverage = _resize_to_width(coverage, bottom_width)
-    diagnostic = _resize_to_width(diagnostic, bottom_width)
-    bottom_height = max(coverage.height, diagnostic.height)
+    panel_b_width = content_width - label_gutter
+    panel_b = _resize_to_width(panel_b, panel_b_width)
 
-    canvas_width = content_width + 2 * outer_margin
-    canvas_height = (
-        2 * outer_margin + top_height + row_gap + bottom_height
-    )
-    canvas = Image.new("RGB", (canvas_width, canvas_height), WHITE)
-
+    a_cell_width = label_gutter + panel_a.width
+    c_cell_width = label_gutter + panel_c.width
+    top_width = a_cell_width + column_gap + c_cell_width
     top_x = outer_margin + (content_width - top_width) // 2
     top_y = outer_margin
-    stability_x = top_x + workflow.width + column_gap
-    canvas.paste(workflow, (top_x, top_y))
-    canvas.paste(stability, (stability_x, top_y))
+    a_x = top_x + label_gutter
+    c_cell_x = top_x + a_cell_width + column_gap
+    c_x = c_cell_x + label_gutter
 
     bottom_y = top_y + top_height + row_gap
-    coverage_x = outer_margin
-    diagnostic_x = outer_margin + bottom_width + column_gap
-    canvas.paste(coverage, (coverage_x, bottom_y))
-    canvas.paste(diagnostic, (diagnostic_x, bottom_y))
+    b_cell_x = outer_margin
+    b_x = b_cell_x + label_gutter
+
+    canvas_width = content_width + 2 * outer_margin
+    canvas_height = bottom_y + panel_b.height + outer_margin
+    canvas = Image.new("RGB", (canvas_width, canvas_height), WHITE)
+    canvas.paste(panel_a, (a_x, top_y))
+    canvas.paste(panel_c, (c_x, top_y))
+    canvas.paste(panel_b, (b_x, bottom_y))
 
     draw = ImageDraw.Draw(canvas)
     font = _font(label_size)
-    label_offset = max(8, round(label_size * 0.18))
+    label_y_offset = max(4, round(label_size * 0.08))
+    label_x_offset = max(4, round(label_gutter * 0.10))
     _draw_panel_label(
         draw,
         "A",
-        (top_x + label_offset, top_y + label_offset),
-        font=font,
-    )
-    _draw_panel_label(
-        draw,
-        "B",
-        (coverage_x + label_offset, bottom_y + label_offset),
+        top_x + label_x_offset,
+        top_y + label_y_offset,
         font=font,
     )
     _draw_panel_label(
         draw,
         "C",
-        (diagnostic_x + label_offset, bottom_y + label_offset),
+        c_cell_x + label_x_offset,
+        top_y + label_y_offset,
+        font=font,
+    )
+    _draw_panel_label(
+        draw,
+        "B",
+        b_cell_x + label_x_offset,
+        bottom_y + label_y_offset,
         font=font,
     )
 
@@ -184,34 +176,30 @@ def assemble_figure3(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Assemble Figure 3 with the workflow and stability heatmap "
-            "as panel A, reference coverage as B, and diagnostic "
-            "heterogeneity as C."
+            "Assemble Figure 3 with A and C on the top row and the "
+            "detail-rich B panel at full width below."
         )
     )
     parser.add_argument("--panels-dir", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
-        "--workflow-name",
-        default="mermaid_generated.png",
+        "--panel-a-name",
+        default="A_track1_chromosome_landscape.png",
     )
     parser.add_argument(
-        "--stability-name",
-        default="A_context_stability_heatmap.png",
+        "--panel-b-name",
+        default="B_track2_subtype_landscape.png",
     )
     parser.add_argument(
-        "--coverage-name",
-        default="B_reference_coverage.png",
+        "--panel-c-name",
+        default="C_track2_segment_architecture.png",
     )
-    parser.add_argument(
-        "--diagnostic-name",
-        default="C_root_diagnostic_heterogeneity.png",
-    )
-    parser.add_argument("--content-width", type=int, default=3200)
-    parser.add_argument("--outer-margin", type=int, default=34)
-    parser.add_argument("--column-gap", type=int, default=42)
-    parser.add_argument("--row-gap", type=int, default=54)
-    parser.add_argument("--label-size", type=int, default=64)
+    parser.add_argument("--content-width", type=int, default=2200)
+    parser.add_argument("--outer-margin", type=int, default=30)
+    parser.add_argument("--label-gutter", type=int, default=58)
+    parser.add_argument("--column-gap", type=int, default=30)
+    parser.add_argument("--row-gap", type=int, default=58)
+    parser.add_argument("--label-size", type=int, default=52)
     parser.add_argument("--dpi", type=int, default=300)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -222,6 +210,7 @@ def main() -> None:
     for name, value in [
         ("--content-width", args.content_width),
         ("--outer-margin", args.outer_margin),
+        ("--label-gutter", args.label_gutter),
         ("--column-gap", args.column_gap),
         ("--row-gap", args.row_gap),
         ("--label-size", args.label_size),
@@ -233,13 +222,13 @@ def main() -> None:
     panels_dir = args.panels_dir.expanduser().resolve()
     out_path = args.out.expanduser().resolve()
     width, height = assemble_figure3(
-        panels_dir / args.workflow_name,
-        panels_dir / args.stability_name,
-        panels_dir / args.coverage_name,
-        panels_dir / args.diagnostic_name,
+        panels_dir / args.panel_a_name,
+        panels_dir / args.panel_b_name,
+        panels_dir / args.panel_c_name,
         out_path,
         content_width=args.content_width,
         outer_margin=args.outer_margin,
+        label_gutter=args.label_gutter,
         column_gap=args.column_gap,
         row_gap=args.row_gap,
         label_size=args.label_size,

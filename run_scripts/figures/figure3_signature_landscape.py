@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""Render the chromosome and gene-event architecture panels for Figure 4."""
+"""Render the chromosome and gene-event architecture panels for Figure 3."""
 
 import argparse
 import os
@@ -985,7 +985,7 @@ def _draw_cross_scale_relationship(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Render the final Figure 4 signature architecture panels."
+        description="Render the final Figure 3 signature architecture panels."
     )
     parser.add_argument(
         "--atlas-dir",
@@ -1029,7 +1029,7 @@ def main() -> None:
     existing = [path for path in selected_outputs.values() if path.exists()]
     if existing and not args.overwrite:
         raise FileExistsError(
-            "Figure 4 outputs already exist; pass --overwrite: "
+            "Figure 3 outputs already exist; pass --overwrite: "
             + ", ".join(str(path) for path in existing)
         )
 
@@ -1057,7 +1057,7 @@ def main() -> None:
         )
 
     counts = references["layer"].value_counts()
-    print("[CNVSIM] Figure 4 signature architecture complete")
+    print("[CNVSIM] Figure 3 signature architecture complete")
     print(
         "  references: "
         f"{len(references)} "
