@@ -1,720 +1,484 @@
 #!/usr/bin/env python3
+"""Render the manuscript Figure 1 from existing atlas-workspace summaries.
+
+Inputs:
+  ATLAS_ROOT/figures/preprocess_baseline/figure1/
+    figure1_platform_composition_counts.tsv
+    figure1B_root_cnv_shape_summary.tsv
+    figure1B_platform_consistency.tsv
+  RELEASE_DIR/atlas/{subtypes,subtype_annotations}.tsv
+
+Outputs default to the existing Figure 1 directory, using the original
+figure1_preprocess_overview basename (vector PDF and PNG). No
+intermediate tables, copied data, QA folders or manifests are generated.
+Dependencies are provided by the repository requirements.txt.
+"""
 from __future__ import annotations
 
-"""Build Figure 1 panels from the frozen CNVSIM source package.
-
-Panel A shows the platform composition of every tumour analysis entering the
-pipeline. Panel B summarizes root-level CNV burden and agreement of autosomal
-gene-level CNV frequencies across platform families. The script also writes a
-full-root version of panel A for supplementary material and the tables behind
-each plot. A precomputed platform-metrics table can be supplied to avoid
-rescanning the complete gene-panel cache when only the figure layout changes.
-"""
-
 import argparse
-import json
 import os
 from pathlib import Path
-import sys
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
 
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+import seaborn as sns
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from cnvsim.preprocess.roots import icdot_root_grouped
-
-
-ID_COL = "analysis_id"
 ROOT_COL = "icdot_root_grouped"
-PLATFORM_COL = "platform_family_refined"
-
-ROOT_LABELS = {
-    "C00_C14": "C00-C14 Oral/pharynx",
-    "C15_C17_C21_C26": "C15/C17/C21/C26 Other digestive",
-    "C16": "C16 Stomach",
-    "C18_C20": "C18-C20 Colon/rectum",
-    "C22_C24": "C22-C24 Liver/biliary",
-    "C25": "C25 Pancreas",
-    "C30_C39": "C30-C39 Respiratory",
-    "C40_C41_C48": "C40/C41/C48 Bone/connective",
-    "C42": "C42 Haematopoietic",
-    "C44": "C44 Skin",
-    "C47": "C47 Peripheral nerves",
-    "C49": "C49 Soft tissue",
-    "C50": "C50 Breast",
-    "C51_C58": "C51-C58 Female genital",
-    "C60_C63": "C60-C63 Male genital",
-    "C64_C68": "C64-C68 Urinary tract",
-    "C69_C70_C72": "C69/C70/C72 Eye/CNS",
-    "C71": "C71 Brain",
-    "C73_C75": "C73-C75 Endocrine",
-    "C76": "C76 Ill-defined sites",
-    "C77": "C77 Lymph nodes",
-    "C80": "C80 Unknown primary site",
-    "UNMAPPED": "Unmapped topography",
-}
-
 PLATFORM_ORDER = ["Arrays_HighRes", "Arrays_LowRes", "NGS_Based"]
 PLATFORM_COLORS = {
     "Arrays_HighRes": "#66C2A5",
     "Arrays_LowRes": "#FC8D62",
     "NGS_Based": "#8DA0CB",
-    "Other": "#BDBDBD",
 }
 PLATFORM_LABELS = {
     "Arrays_HighRes": "High-resolution arrays",
     "Arrays_LowRes": "Low-resolution arrays/CGH",
     "NGS_Based": "NGS-based assays",
-    "Other": "Other/unknown",
+}
+ROOT_LABELS = {
+    "C00_C14": "Oral/pharynx",
+    "C15_C17_C21_C26": "Other digestive",
+    "C16": "Stomach",
+    "C18_C20": "Colon/rectum",
+    "C22_C24": "Liver/biliary",
+    "C25": "Pancreas",
+    "C30_C39": "Respiratory",
+    "C40_C41_C48": "Bone/connective",
+    "C42": "Haematopoietic",
+    "C44": "Skin",
+    "C49": "Soft tissue",
+    "C50": "Breast",
+    "C51_C58": "Female genital",
+    "C60_C63": "Male genital",
+    "C64_C68": "Urinary tract",
+    "C69_C70_C72": "Eye/CNS",
+    "C71": "Brain",
+    "C73_C75": "Endocrine",
+    "C77": "Lymph nodes",
+    "C47": "Peripheral nerves",
+    "C76": "Ill-defined sites",
+    "C80": "Unknown primary site",
+}
+SOURCE_ORDER = ["GENIE", "GEO", "cBioPortal", "TCGA", "ArrayExpress", "Other"]
+DISPLAY_SOURCE_ORDER = ["GENIE", "GEO", "cBioPortal", "TCGA", "Other"]
+DISPLAY_SOURCE_MAPPING = {"ArrayExpress": "Other"}
+SOURCE_COLORS = {
+    "GENIE": "#2E5EAA",
+    "GEO": "#69A9A4",
+    "cBioPortal": "#D99B63",
+    "TCGA": "#9985B7",
+    "ArrayExpress": "#DCC565",
+    "Other": "#BDBDBD",
 }
 TEXT = "#111111"
-
-plt.rcParams.update(
-    {
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "text.color": TEXT,
-        "axes.labelcolor": TEXT,
-        "xtick.color": TEXT,
-        "ytick.color": TEXT,
-    }
-)
-
-PLATFORM_METRIC_COLUMNS = [
-    ROOT_COL,
-    "feature_scope",
-    "avg_corr_offdiag",
-    "median_delta_freq",
-    "n_genes",
-    "n_complete_genes",
-    "n_platform_families",
-    "n_samples",
-]
+BLUE = "#2E5EAA"
+MUTED = "#68747A"
+GRID = "#E3E8EA"
 
 
-def _read_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() in {".parquet", ".pq"}:
-        return pd.read_parquet(path)
-    return pd.read_csv(path, sep="\t", dtype=str, low_memory=False)
+def reference_number(key: str) -> int:
+    for marker in ("CTX", "COND"):
+        if marker in str(key):
+            return int(str(key).rsplit(marker, 1)[1])
+    raise ValueError(f"Unrecognized subtype key: {key}")
 
 
-def _normalize_platform(value: object) -> str:
-    text = str(value).strip()
-    aliases = {
-        "Panels_NGS": "NGS_Based",
-        "NGS": "NGS_Based",
-        "NGS panels": "NGS_Based",
-        "NGS_panel": "NGS_Based",
-        "NGS_panels": "NGS_Based",
-        "High-resolution arrays": "Arrays_HighRes",
-        "Low-resolution arrays": "Arrays_LowRes",
-    }
-    text = aliases.get(text, text)
-    return text if text in PLATFORM_ORDER else "Other"
+def style_axis(axis, *, grid_axis: str = "both") -> None:
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["left"].set_color("#91A0A6")
+    axis.spines["bottom"].set_color("#91A0A6")
+    axis.grid(axis=grid_axis, color=GRID, linewidth=0.55)
+    axis.set_axisbelow(True)
 
 
-def _load_metadata(source_dir: Path, exclude_roots: set[str]) -> pd.DataFrame:
-    path = source_dir / "metadata" / "tumour_analysis_metadata.parquet"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing tumour metadata: {path}")
-    meta = pd.read_parquet(path)
-    required = {ID_COL, PLATFORM_COL}
-    missing = sorted(required - set(meta.columns))
-    if missing:
-        raise KeyError(f"Tumour metadata missing columns: {missing}")
-
-    meta = meta.copy()
-    meta[ID_COL] = meta[ID_COL].astype(str)
-    if ROOT_COL not in meta.columns:
-        if "icdo_topography_id" not in meta.columns:
-            raise KeyError(f"Metadata must contain {ROOT_COL} or icdo_topography_id")
-        meta[ROOT_COL] = meta["icdo_topography_id"].map(icdot_root_grouped)
-    meta[ROOT_COL] = meta[ROOT_COL].fillna("UNMAPPED").astype(str)
-    meta[PLATFORM_COL] = meta[PLATFORM_COL].map(_normalize_platform)
-    meta = meta.drop_duplicates(ID_COL, keep="first")
-    if exclude_roots:
-        meta = meta[~meta[ROOT_COL].isin(exclude_roots)].copy()
-    if meta.empty:
-        raise ValueError("No tumour analyses remain after root filtering")
-    return meta
+def point_size(root: str, size_map: dict[str, int]) -> float:
+    # Preserve the original Figure 1's square-root count scaling at journal size.
+    return 8.0 + 42.0 * (float(size_map[root]) / max(size_map.values())) ** 0.5
 
 
-def _root_palette(roots: list[str]) -> dict[str, tuple[float, float, float]]:
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial"],
+    "font.size": 7.0,
+    "axes.labelsize": 7.0,
+    "xtick.labelsize": 6.5,
+    "ytick.labelsize": 6.5,
+    "text.color": TEXT,
+    "axes.labelcolor": TEXT,
+    "xtick.color": TEXT,
+    "ytick.color": TEXT,
+    "axes.linewidth": 0.65,
+    "xtick.major.width": 0.55,
+    "ytick.major.width": 0.55,
+    "xtick.major.size": 2.5,
+    "ytick.major.size": 2.5,
+    "legend.frameon": False,
+    "pdf.fonttype": 42,
+    "savefig.facecolor": "white",
+})
+
+
+def root_palette(roots):
     ordered = sorted(set(str(root) for root in roots))
-    try:
-        import seaborn as sns
-
-        colors = sns.color_palette("husl", n_colors=len(ordered))
-    except ImportError:
-        cmap = plt.get_cmap("turbo")
-        colors = [cmap(i / max(1, len(ordered) - 1))[:3] for i in range(len(ordered))]
+    colors = sns.color_palette("husl", n_colors=len(ordered))
     return {root: colors[i] for i, root in enumerate(ordered)}
 
 
-def _platform_counts(meta: pd.DataFrame) -> pd.DataFrame:
-    counts = (
-        meta.groupby([ROOT_COL, PLATFORM_COL], dropna=False)[ID_COL]
-        .nunique()
-        .unstack(fill_value=0)
-    )
-    for platform in [*PLATFORM_ORDER, "Other"]:
-        if platform not in counts.columns:
-            counts[platform] = 0
-    counts = counts[[*PLATFORM_ORDER, "Other"]]
-    counts["Total"] = counts.sum(axis=1)
-    return counts.sort_values("Total", ascending=False).reset_index()
+def root_display_label(root):
+    codes = {
+        "C15_C17_C21_C26": "C15/C17/C21/C26",
+        "C40_C41_C48": "C40/C41/C48",
+        "C69_C70_C72": "C69/C70/C72",
+    }
+    return f"{codes.get(root, root.replace('_', '-'))} {ROOT_LABELS[root]}"
 
 
-def _plot_platform_composition(
-    counts: pd.DataFrame,
-    *,
-    out_path: Path,
-    top_n: int | None,
-) -> None:
-    rows = counts.copy()
-    if top_n is not None and len(rows) > int(top_n):
-        top = rows.iloc[: int(top_n)].copy()
-        rest = rows.iloc[int(top_n) :]
-        other = {ROOT_COL: "OTHER_ROOTS"}
-        for col in [*PLATFORM_ORDER, "Other", "Total"]:
-            other[col] = int(rest[col].sum())
-        rows = pd.concat([top, pd.DataFrame([other])], ignore_index=True)
-
-    rows = rows.iloc[::-1].reset_index(drop=True)
-    labels = [
-        "Other remaining roots"
-        if root == "OTHER_ROOTS"
-        else ROOT_LABELS.get(str(root), str(root))
-        for root in rows[ROOT_COL]
-    ]
-    platforms = [p for p in [*PLATFORM_ORDER, "Other"] if int(rows[p].sum()) > 0]
-
-    height = 4.7 if top_n is not None else max(5.4, 0.34 * len(rows) + 1.3)
-    fig, ax = plt.subplots(figsize=(13.2, height))
-    left = np.zeros(len(rows), dtype=float)
-    y = np.arange(len(rows))
-    for platform in platforms:
-        values = rows[platform].to_numpy(dtype=float)
-        ax.barh(
-            y,
-            values,
-            left=left,
-            height=0.72,
-            color=PLATFORM_COLORS[platform],
-            edgecolor="white",
-            linewidth=0.8,
-            label=PLATFORM_LABELS[platform],
-        )
-        left += values
-
-    pad = max(1.0, float(left.max()) * 0.008)
-    for yy, total in zip(y, left, strict=False):
-        ax.text(
-            total + pad,
-            yy,
-            f"{int(total):,}",
-            va="center",
-            ha="left",
-            fontsize=10.5,
-            color=TEXT,
-        )
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=10.5 if top_n is not None else 9.0)
-    ax.set_xlabel("Number of cancer analyses")
-    ax.grid(axis="x", color="#E3E3E3", linewidth=0.9)
-    ax.set_axisbelow(True)
-    ax.set_xlim(0, float(left.max()) * 1.13)
-    ax.legend(
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.13 if top_n is not None else 1.09),
-        ncol=len(platforms),
-        frameon=False,
-    )
-    for spine in ["top", "right", "left"]:
-        ax.spines[spine].set_visible(False)
-    fig.tight_layout(pad=0.4)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
-    plt.close(fig)
-
-
-def _shape_summary(meta: pd.DataFrame, proxy_path: Path) -> pd.DataFrame:
-    proxy = _read_table(proxy_path)
-    if ID_COL not in proxy.columns:
-        raise KeyError(f"Shape proxy table must contain {ID_COL}")
-    required = {"cnv_fraction", "variant_count"}
-    missing = sorted(required - set(proxy.columns))
-    if missing:
-        raise KeyError(f"Shape proxy table missing columns: {missing}")
-    proxy = proxy.copy()
-    proxy[ID_COL] = proxy[ID_COL].astype(str)
-    for col in ["cnv_fraction", "variant_count"]:
-        proxy[col] = pd.to_numeric(proxy[col], errors="coerce")
-    joined = meta[[ID_COL, ROOT_COL]].merge(
-        proxy[[ID_COL, "cnv_fraction", "variant_count"]],
-        on=ID_COL,
-        how="inner",
-    )
-    if joined.empty:
-        raise ValueError("No overlap between tumour metadata and shape proxies")
-    return (
-        joined.groupby(ROOT_COL, as_index=False)
-        .agg(
-            n_shape_profiles=(ID_COL, "nunique"),
-            median_cnv_fraction=("cnv_fraction", "median"),
-            median_variant_count=("variant_count", "median"),
-        )
-        .sort_values("n_shape_profiles", ascending=False)
-    )
-
-
-def _compute_platform_metrics(
-    *,
-    meta: pd.DataFrame,
-    cache_dir: Path,
-    min_samples_per_family: int,
-    low_threshold: float,
-    high_threshold: float,
-) -> pd.DataFrame:
-    files = sorted(cache_dir.glob("bucket=*/part-*.parquet"))
-    if not files:
-        raise FileNotFoundError(f"No gene-panel cache parts found under {cache_dir}")
-
-    family_counts = (
-        meta.groupby([ROOT_COL, PLATFORM_COL])[ID_COL]
-        .nunique()
-        .rename("n_samples")
-        .reset_index()
-    )
-    eligible = family_counts[family_counts["n_samples"] >= int(min_samples_per_family)]
-    eligible_pairs = set(zip(eligible[ROOT_COL], eligible[PLATFORM_COL], strict=False))
-    id_root = meta.set_index(ID_COL)[ROOT_COL].to_dict()
-    id_platform = meta.set_index(ID_COL)[PLATFORM_COL].to_dict()
-
-    partials: list[pd.DataFrame] = []
-    columns = [
-        ID_COL,
-        "gene_symbol",
-        "chrom",
-        "dup_frac",
-        "del_frac",
-        "hldup_frac",
-        "hldel_frac",
-    ]
-    print(
-        "[CNVSIM] computing autosomal platform metrics from the gene-panel "
-        "cache; this is a one-time derived-table step",
-        flush=True,
-    )
-    for index, path in enumerate(files, start=1):
-        frame = pd.read_parquet(path, columns=columns)
-        if frame.empty:
-            continue
-        frame["chrom"] = (
-            frame["chrom"]
-            .astype(str)
-            .str.replace("chr", "", regex=False)
-        )
-        frame = frame[frame["chrom"].isin({str(i) for i in range(1, 23)})]
-        if frame.empty:
-            continue
-        frame[ID_COL] = frame[ID_COL].astype(str)
-        frame[ROOT_COL] = frame[ID_COL].map(id_root)
-        frame[PLATFORM_COL] = frame[ID_COL].map(id_platform)
-        frame = frame.dropna(subset=[ROOT_COL, PLATFORM_COL, "gene_symbol"])
-        if frame.empty:
-            continue
-        keep = pd.MultiIndex.from_frame(frame[[ROOT_COL, PLATFORM_COL]]).isin(eligible_pairs)
-        frame = frame.loc[keep].copy()
-        if frame.empty:
-            continue
-        for col in ["dup_frac", "del_frac", "hldup_frac", "hldel_frac"]:
-            frame[col] = pd.to_numeric(frame[col], errors="coerce").fillna(0.0)
-        frame["any_cnv"] = (
-            (frame["dup_frac"] >= float(low_threshold))
-            | (frame["del_frac"] >= float(low_threshold))
-            | (frame["hldup_frac"] >= float(high_threshold))
-            | (frame["hldel_frac"] >= float(high_threshold))
-        )
-        per_sample = (
-            frame.groupby([ROOT_COL, PLATFORM_COL, "gene_symbol", ID_COL], as_index=False)["any_cnv"]
-            .max()
-        )
-        partials.append(
-            per_sample.groupby([ROOT_COL, PLATFORM_COL, "gene_symbol"], as_index=False)
-            .agg(n_supporting=("any_cnv", "sum"), n_evaluable=(ID_COL, "nunique"))
-        )
-        if index % 25 == 0 or index == len(files):
-            print(f"[CNVSIM] gene-panel cache parts: {index}/{len(files)}", flush=True)
-
-    if not partials:
-        raise ValueError("No eligible gene-panel rows were found")
-    support = pd.concat(partials, ignore_index=True)
-    support = (
-        support.groupby([ROOT_COL, PLATFORM_COL, "gene_symbol"], as_index=False)
-        .agg(n_supporting=("n_supporting", "sum"), n_evaluable=("n_evaluable", "sum"))
-    )
-    support["frequency"] = support["n_supporting"] / support["n_evaluable"].replace(0, np.nan)
-
-    rows: list[dict[str, object]] = []
-    root_sizes = meta.groupby(ROOT_COL)[ID_COL].nunique().to_dict()
-    for root, root_support in support.groupby(ROOT_COL):
-        matrix = root_support.pivot(index="gene_symbol", columns=PLATFORM_COL, values="frequency")
-        if matrix.shape[1] < 2:
-            continue
-        delta = matrix.max(axis=1, skipna=True) - matrix.min(axis=1, skipna=True)
-        complete = matrix.dropna(axis=0, how="any")
-        complete = complete.loc[complete.var(axis=1) > 0]
-        if complete.shape[0] < 10:
-            continue
-        corr = complete.corr(method="pearson", min_periods=10)
-        values = corr.to_numpy()[np.triu_indices_from(corr.to_numpy(), k=1)]
-        finite_values = values[np.isfinite(values)]
-        if finite_values.size == 0:
-            continue
-        rows.append(
-            {
-                ROOT_COL: str(root),
-                "feature_scope": "autosomes",
-                "avg_corr_offdiag": float(finite_values.mean()),
-                "median_delta_freq": float(delta.median(skipna=True)),
-                "n_genes": int(matrix.shape[0]),
-                "n_complete_genes": int(complete.shape[0]),
-                "n_platform_families": int(matrix.shape[1]),
-                "n_samples": int(root_sizes.get(root, 0)),
-            }
-        )
-    return (
-        pd.DataFrame(rows, columns=PLATFORM_METRIC_COLUMNS)
-        .sort_values("n_samples", ascending=False)
-        .reset_index(drop=True)
-    )
-
-
-def _plot_panel_b(
-    *,
-    shape: pd.DataFrame,
-    platform: pd.DataFrame,
-    counts: pd.DataFrame,
-    out_path: Path,
-) -> None:
+def draw_original_panel_b(fig, shape, platform, counts):
     roots = counts[ROOT_COL].astype(str).tolist()
-    palette = _root_palette(roots)
-    size_map = counts.set_index(ROOT_COL)["Total"].to_dict()
-    max_n = max(size_map.values())
-
-    fig = plt.figure(figsize=(13.6, 5.2), constrained_layout=True)
-    grid = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 0.62], wspace=0.25)
-    ax_left = fig.add_subplot(grid[0, 0])
-    ax_right = fig.add_subplot(grid[0, 1])
-    ax_legend = fig.add_subplot(grid[0, 2])
-    ax_legend.axis("off")
-
-    def point_size(root: str) -> float:
-        return 55.0 + 290.0 * np.sqrt(float(size_map.get(root, 0)) / max(1.0, float(max_n)))
-
-    x_values: list[float] = []
-    y_values: list[float] = []
+    palette = root_palette(roots)
+    size_map = counts.set_index(ROOT_COL).Total.to_dict()
+    left = fig.add_axes([0.105, 0.565, 0.255, 0.278], label="A_burden")
+    right = fig.add_axes([0.485, 0.565, 0.255, 0.278], label="A_platform")
+    legend = fig.add_axes([0.765, 0.530, 0.225, 0.325], label="Anatomical legend")
+    legend.axis("off")
+    xvalues, yvalues = [], []
     for _, row in shape.iterrows():
         root = str(row[ROOT_COL])
-        x = float(np.log1p(row["median_variant_count"]))
-        y = float(row["median_cnv_fraction"])
-        x_values.append(x)
-        y_values.append(y)
-        ax_left.scatter(x, y, s=point_size(root), color=palette[root], edgecolor="white", linewidth=0.5, zorder=3)
-    if len(x_values) >= 3:
-        coeff = np.polyfit(np.asarray(x_values), np.asarray(y_values), deg=1)
-        xx = np.linspace(min(x_values), max(x_values), 100)
-        ax_left.plot(xx, np.polyval(coeff, xx), color="0.35", linewidth=1.2, zorder=2)
-    ax_left.set_xlabel("log(1 + median CNV event count per analysis)")
-    ax_left.set_ylabel("Median genome fraction altered by CNVs")
-    ax_left.grid(alpha=0.22)
-    ax_left.text(
-        0.03,
-        0.54,
-        "High genome-wide alteration\nHigh event count",
-        transform=ax_left.transAxes,
-        fontsize=7.5,
-        color=TEXT,
-        va="center",
-        ha="left",
-        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.45, "pad": 0.7},
-    )
+        x, y = float(np.log1p(row.median_variant_count)), float(row.median_cnv_fraction)
+        xvalues.append(x)
+        yvalues.append(y)
+        left.scatter(x, y, s=point_size(root, size_map), color=palette[root], edgecolor="white", linewidth=0.5, zorder=3)
+    coefficients = np.polyfit(np.asarray(xvalues), np.asarray(yvalues), deg=1)
+    xx = np.linspace(min(xvalues), max(xvalues), 100)
+    left.plot(xx, np.polyval(coefficients, xx), color="0.35", linewidth=0.8, zorder=2)
+    left.set(xlim=(1.5, 3.45), ylim=(-0.02, 0.255),
+             xlabel="log(1 + median CNV event count\nper analysis)",
+             ylabel="Median genome fraction\naltered by CNVs")
+    left.set_xticks([1.5, 2.0, 2.5, 3.0])
+    left.set_yticks([0, 0.05, 0.10, 0.15, 0.20])
 
-    platform_plot = platform.copy()
-    for column in ["avg_corr_offdiag", "median_delta_freq"]:
-        platform_plot[column] = pd.to_numeric(platform_plot[column], errors="coerce")
-    platform_plot = platform_plot.dropna(
-        subset=["avg_corr_offdiag", "median_delta_freq"]
-    )
-
-    for _, row in platform_plot.iterrows():
+    for _, row in platform.iterrows():
         root = str(row[ROOT_COL])
-        ax_right.scatter(
-            float(row["avg_corr_offdiag"]),
-            float(row["median_delta_freq"]),
-            s=point_size(root),
-            color=palette[root],
-            edgecolor="white",
-            linewidth=0.5,
-            zorder=3,
-        )
-    if not platform_plot.empty:
-        x = platform_plot["avg_corr_offdiag"].to_numpy(dtype=float)
-        y = platform_plot["median_delta_freq"].to_numpy(dtype=float)
-        x25, x75 = np.nanquantile(x, [0.25, 0.75])
-        y25, y75 = np.nanquantile(y, [0.25, 0.75])
-        ax_right.axvspan(x25, x75, color="0.95", zorder=0)
-        ax_right.axhline(y25, color="0.75", linewidth=0.8, linestyle="--")
-        ax_right.axhline(y75, color="0.75", linewidth=0.8, linestyle="--")
-        ax_right.text(
-            0.76,
-            0.92,
-            "Low concordance\nHigh divergence",
-            transform=ax_right.transAxes,
-            fontsize=7.5,
-            color=TEXT,
-            va="top",
-        )
-    ax_right.set_xlabel("Mean cross-family correlation")
-    ax_right.set_ylabel("Median frequency range\nacross platform families")
-    ax_right.grid(alpha=0.22)
+        right.scatter(float(row.avg_corr_offdiag), float(row.median_delta_freq),
+                      s=point_size(root, size_map), color=palette[root], edgecolor="white", linewidth=0.5, zorder=3)
+    x = platform.avg_corr_offdiag.to_numpy(float)
+    y = platform.median_delta_freq.to_numpy(float)
+    x25, x75 = np.nanquantile(x, [0.25, 0.75])
+    y25, y75 = np.nanquantile(y, [0.25, 0.75])
+    right.axvspan(x25, x75, color="0.90", zorder=0)
+    right.axhline(y25, color="0.75", linewidth=0.55, linestyle="--")
+    right.axhline(y75, color="0.75", linewidth=0.55, linestyle="--")
+    right.set(xlim=(-0.06, 1.03), ylim=(0.018, 0.185),
+              xlabel="Mean cross-family\ncorrelation", ylabel="Median frequency range\nacross platform families")
+    right.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    right.set_yticks([0.04, 0.08, 0.12, 0.16])
+    for axis in [left, right]:
+        style_axis(axis, grid_axis="y")
 
-    for axis in [ax_left, ax_right]:
-        axis.spines["top"].set_visible(False)
-        axis.spines["right"].set_visible(False)
-        axis.set_axisbelow(True)
+    handles = [Line2D([0], [0], marker="o", color="none", markerfacecolor=palette[root],
+                      markeredgecolor="white", markersize=3.5, label=root_display_label(root)) for root in roots]
+    legend.legend(handles=handles, loc="center left", frameon=False, fontsize=6.0,
+                  labelspacing=0.28, handlelength=0.9, handletextpad=0.3, borderaxespad=0.0)
+    return left, right, legend
 
-    handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="none",
-            markerfacecolor=palette[root],
-            markeredgecolor="white",
-            markersize=5.2,
-            label=ROOT_LABELS.get(root, root),
-        )
-        for root in roots
-    ]
-    ax_legend.legend(
-        handles=handles,
-        loc="center left",
-        frameon=False,
-        fontsize=6.1,
-        labelspacing=0.55,
-        handletextpad=0.45,
-        borderaxespad=0.0,
-    )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight", pad_inches=0.05)
+
+def horizontal_root_labels(fig, axis, centres, names):
+    """Place horizontal labels in the smallest available non-overlapping lane.
+
+    Thin vertical guides link labels to their groups. Guides occupy whitespace
+    only: segments stop around intervening text instead of crossing letters.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width_pt = fig.get_figwidth() * 72
+    height_pt = fig.get_figheight() * 72
+    properties = FontProperties(family="Arial", size=6.1)
+    lanes = [[], [], [], []]
+    labels = []
+    placements = []
+    for centre, name in zip(centres, names, strict=True):
+        root_x = fig.transFigure.inverted().transform(axis.transData.transform((centre, 0)))[0]
+        text_width = renderer.get_text_width_height_descent(name, properties, ismath=False)[0] / fig.dpi * 72
+        text_x = np.clip(root_x * width_pt, 0.035 * width_pt + text_width / 2, 0.985 * width_pt - text_width / 2)
+        interval = (float(text_x - text_width / 2), float(text_x + text_width / 2))
+        lane = next((i for i, occupied in enumerate(lanes) if all(interval[0] >= previous[1] + 3.0 for previous in occupied)), None)
+        if lane is None:
+            raise ValueError(f"Horizontal root labels need more room near {name}")
+        lanes[lane].append(interval)
+        y = 0.172 - lane * 0.026
+        artist = fig.text(text_x / width_pt, y, name, ha="center", va="top", fontsize=6.1)
+        labels.append(artist)
+        placements.append({"root_label":name, "lane":lane, "root_x":float(root_x), "text_x":float(text_x / width_pt)})
+    fig.canvas.draw()
+    boxes = [artist.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted()) for artist in labels]
+    start_y = axis.get_position().y0 * height_pt - 2.0
+    for placement, own_box in zip(placements, boxes, strict=True):
+        x = placement["root_x"] * width_pt
+        end_y = own_box.y1 * 72 + 1.5
+        segments = [(end_y, start_y)]
+        for other_box in boxes:
+            if other_box is own_box or not (other_box.x0 * 72 - 1.0 <= x <= other_box.x1 * 72 + 1.0):
+                continue
+            bottom, top = other_box.y0 * 72 - 1.0, other_box.y1 * 72 + 1.0
+            next_segments = []
+            for lo, hi in segments:
+                if top <= lo or bottom >= hi:
+                    next_segments.append((lo, hi))
+                else:
+                    if lo < bottom: next_segments.append((lo, bottom))
+                    if top < hi: next_segments.append((top, hi))
+            segments = next_segments
+        for lo, hi in segments:
+            if hi > lo:
+                fig.add_artist(Line2D([placement["root_x"]] * 2, [lo / height_pt, hi / height_pt],
+                                      transform=fig.transFigure, color="#AAB3B8", lw=0.5, zorder=0.5))
+    return placements
+
+
+def render(data: dict[str, pd.DataFrame], output: Path) -> None:
+    shape = data["shape"]
+    platform = data["platform"]
+    counts = data["counts"]
+    families = data["families"]
+    refs = data["references"]
+    font_manager.findfont("Arial", fallback_to_default=False)
+    fig = plt.figure(figsize=(174 / 25.4, 190 / 25.4), dpi=300)
+
+    fig.text(0.040, 0.985, "A", fontsize=10, weight="bold", va="top")
+    fig.text(0.105, 0.957, "204,587 neoplastic CNV analyses across 22 anatomical groups", fontsize=8.2, weight="bold", va="top")
+    family_axis = fig.add_axes([0.105, 0.916, 0.865, 0.014], label="Platform family composition")
+    left = 0.0
+    for family in PLATFORM_ORDER:
+        fraction = float(families.loc[family, "fraction"])
+        family_axis.barh(0.5, fraction, left=left, height=1.0, color=PLATFORM_COLORS[family], edgecolor="white", linewidth=0.6)
+        family_axis.text(left + fraction / 2, 0.5, f"{100*fraction:.1f}%", ha="center", va="center", fontsize=6.0)
+        left += fraction
+    family_axis.set(xlim=(0, 1), ylim=(0, 1))
+    family_axis.axis("off")
+    platform_handles = [Patch(facecolor=PLATFORM_COLORS[f], label=PLATFORM_LABELS[f]) for f in PLATFORM_ORDER]
+    fig.legend(handles=platform_handles, loc="center", bbox_to_anchor=(0.538, 0.892), ncol=3,
+               fontsize=6.4, handlelength=1.1, handletextpad=0.45, columnspacing=1.5)
+
+    ax_a, ax_b, root_legend = draw_original_panel_b(fig, shape, platform, counts)
+
+    fig.text(0.040, 0.488, "B", fontsize=10, weight="bold", va="center")
+    fig.text(0.105, 0.488, "Reference depth and source composition", fontsize=7.7, weight="bold", va="center")
+    fig.text(0.970, 0.462, "112 subtypes  |  155,881 defining analyses  |  median depth 882.5", fontsize=6.5, ha="right", color=MUTED)
+    depth_axis = fig.add_axes([0.105, 0.338, 0.865, 0.107], label="B_depth")
+    source_axis = fig.add_axes([0.105, 0.196, 0.865, 0.108], label="B_sources")
+    positions = refs.plot_position.to_numpy(float)
+    xmin, xmax = -0.8, float(positions.max() + 0.8)
+    root_centres, root_names = [], []
+    for i, (root, group) in enumerate(refs.groupby("root", sort=False)):
+        lo, hi = float(group.plot_position.min() - 0.48), float(group.plot_position.max() + 0.48)
+        if i % 2 == 0:
+            depth_axis.axvspan(lo, hi, color="#E6E6E6", zorder=0)
+        root_centres.append(float(group.plot_position.mean()))
+        root_names.append(ROOT_LABELS[root])
+    median_n = float(refs.n_definition_samples.median())
+    depth_axis.axhline(median_n, color="#A4ADB3", lw=0.65, linestyle=(0, (3, 2)), zorder=1)
+    depth_axis.scatter(positions, refs.n_definition_samples, color=BLUE, s=5.4, linewidth=0, zorder=3)
+    depth_axis.set(yscale="log", ylim=(180, 20000), xlim=(xmin, xmax), ylabel="Defining analyses\n(log scale)")
+    depth_axis.yaxis.set_major_locator(FixedLocator([200, 1000, 10000]))
+    depth_axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{int(value):,}"))
+    depth_axis.yaxis.set_minor_locator(NullLocator())
+    depth_axis.set_xticks([])
+    style_axis(depth_axis, grid_axis="y")
+    depth_axis.spines["bottom"].set_visible(False)
+
+    display = refs[["reference_key", "root", "n_definition_samples", "plot_position", *DISPLAY_SOURCE_ORDER]].copy()
+    display["Other"] = refs["Other"] + refs["ArrayExpress"]
+    assert display[DISPLAY_SOURCE_ORDER].sum(axis=1).eq(refs.n_definition_samples).all()
+    bottom = np.zeros(len(refs), dtype=float)
+    for name in DISPLAY_SOURCE_ORDER:
+        values = (display[name] / display.n_definition_samples).to_numpy(float)
+        source_axis.bar(positions, 100 * values, bottom=100 * bottom, width=0.94,
+                        color=SOURCE_COLORS[name], linewidth=0, align="center")
+        bottom += values
+    assert np.allclose(bottom, 1.0)
+    source_axis.set(ylim=(0, 100), xlim=(xmin, xmax), ylabel="Source share (%)")
+    source_axis.set_yticks([0, 50, 100])
+    source_axis.set_xticks([])
+    source_axis.spines["top"].set_visible(False)
+    source_axis.spines["right"].set_visible(False)
+    source_axis.spines["bottom"].set_visible(False)
+    source_axis.spines["left"].set_color("#91A0A6")
+    horizontal_root_labels(fig, source_axis, root_centres, root_names)
+    source_handles = [Patch(facecolor=SOURCE_COLORS[name], label=name) for name in DISPLAY_SOURCE_ORDER]
+    fig.legend(handles=source_handles, loc="center", bbox_to_anchor=(0.538, 0.037), ncol=5,
+               fontsize=6.5, handlelength=1.0, handletextpad=0.4, columnspacing=1.25)
+
+    fig.canvas.draw()
+    require_matplotlib_panel_alignment(fig, ax_a, ax_b, depth_axis, source_axis)
+    metadata_pdf = {"Title": "CNVSIM Figure 1: anatomical heterogeneity and reference depth", "Author": "", "Creator": "", "Producer": ""}
+    fig.savefig(output / "figure1_preprocess_overview.pdf", metadata=metadata_pdf)
+    fig.savefig(output / "figure1_preprocess_overview.png", dpi=400, metadata={"Software": ""})
     plt.close(fig)
 
 
-def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
-    names = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+def require_matplotlib_panel_alignment(fig, left, right, depth, sources) -> None:
+    """Check this figure's final plot areas in memory, without helper imports.
+
+    Both background panels must share their vertical edges and plot widths;
+    the two reference tracks must share their horizontal edges. All plot
+    areas must be disjoint. The tolerance is 1.5 pt at the exported size.
+    """
+    width, height = fig.get_size_inches() * 72
+    boxes = {
+        name: np.array([axis.get_position().x0 * width,
+                        axis.get_position().y0 * height,
+                        axis.get_position().x1 * width,
+                        axis.get_position().y1 * height])
+        for name, axis in [("left", left), ("right", right),
+                           ("depth", depth), ("sources", sources)]
+    }
+    differences = [
+        abs(boxes["left"][1] - boxes["right"][1]),
+        abs(boxes["left"][3] - boxes["right"][3]),
+        abs(np.diff(boxes["left"][[0, 2]])[0]
+            - np.diff(boxes["right"][[0, 2]])[0]),
+        abs(boxes["depth"][0] - boxes["sources"][0]),
+        abs(boxes["depth"][2] - boxes["sources"][2]),
     ]
-    for name in names:
-        try:
-            return ImageFont.truetype(name, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+    if max(differences) > 1.5:
+        raise ValueError("Figure 1 plot areas differ by more than 1.5 pt")
+    items = list(boxes.items())
+    for index, (first, a) in enumerate(items):
+        for second, b in items[index + 1:]:
+            if (min(a[2], b[2]) > max(a[0], b[0]) + 0.01
+                    and min(a[3], b[3]) > max(a[1], b[1]) + 0.01):
+                raise ValueError(f"Overlapping Figure 1 plot areas: {first}, {second}")
 
 
-def _tight_crop(image: Image.Image, tolerance: int = 248, pad: int = 6) -> Image.Image:
-    array = np.asarray(image.convert("RGB"))
-    mask = (array < tolerance).any(axis=2)
-    ys, xs = np.where(mask)
-    if xs.size == 0:
-        return image.convert("RGB")
-    return image.convert("RGB").crop(
-        (
-            max(0, int(xs.min()) - pad),
-            max(0, int(ys.min()) - pad),
-            min(image.width, int(xs.max()) + 1 + pad),
-            min(image.height, int(ys.max()) + 1 + pad),
-        )
+def _read_tsv(path: Path, required: set[str]) -> pd.DataFrame:
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing Figure 1 input: {path}")
+    table = pd.read_csv(path, sep="\t")
+    missing = required - set(table.columns)
+    if missing:
+        raise ValueError(f"Missing columns in {path.name}: {sorted(missing)}")
+    return table
+
+
+def load_data(summary_dir: Path, release_dir: Path) -> dict[str, pd.DataFrame]:
+    """Build plot tables in memory from the existing analysis outputs."""
+    counts = _read_tsv(
+        summary_dir / "figure1_platform_composition_counts.tsv",
+        {ROOT_COL, "Total", "Other", *PLATFORM_ORDER},
+    )
+    shape = _read_tsv(
+        summary_dir / "figure1B_root_cnv_shape_summary.tsv",
+        {ROOT_COL, "n_shape_profiles", "median_cnv_fraction", "median_variant_count"},
+    )
+    platform = _read_tsv(
+        summary_dir / "figure1B_platform_consistency.tsv",
+        {ROOT_COL, "feature_scope", "avg_corr_offdiag", "median_delta_freq"},
+    )
+    subtypes = _read_tsv(
+        release_dir / "atlas/subtypes.tsv",
+        {"reference_key", "root", "reference_layer", "n_definition_samples"},
+    )
+    annotations = _read_tsv(
+        release_dir / "atlas/subtype_annotations.tsv",
+        {"reference_key", "annotation_type", "annotation_value", "n_samples", "fraction"},
     )
 
+    for table, key in [(counts, ROOT_COL), (shape, ROOT_COL),
+                       (platform, ROOT_COL), (subtypes, "reference_key")]:
+        if table[key].isna().any() or table[key].duplicated().any():
+            raise ValueError(f"Missing or duplicate Figure 1 identifiers: {key}")
+    if (len(counts) != 22 or int(counts.Total.sum()) != 204587
+            or not counts.Other.eq(0).all()
+            or not counts[PLATFORM_ORDER].sum(axis=1).eq(counts.Total).all()):
+        raise ValueError("Input counts do not match the approved Figure 1 cohort")
+    if (set(shape[ROOT_COL]) != set(counts[ROOT_COL])
+            or int(shape.n_shape_profiles.sum()) != int(counts.Total.sum())):
+        raise ValueError("Burden summaries and input-analysis counts do not reconcile")
+    if not shape.median_variant_count.ge(0).all():
+        raise ValueError("CNV event counts must be non-negative before log1p transformation")
+    if (len(platform) != 21
+            or set(shape[ROOT_COL]) - set(platform[ROOT_COL]) != {"C80"}
+            or not set(platform[ROOT_COL]).issubset(set(counts[ROOT_COL]))
+            or not platform.feature_scope.eq("autosomes").all()):
+        raise ValueError("Platform summaries must contain the 21 evaluable autosomal roots")
+    for table, columns in [
+        (shape, ["median_cnv_fraction", "median_variant_count"]),
+        (platform, ["avg_corr_offdiag", "median_delta_freq"]),
+    ]:
+        if not np.isfinite(table[columns].to_numpy(float)).all():
+            raise ValueError("Non-finite Figure 1 background summaries")
 
-def _resize_width(image: Image.Image, width: int) -> Image.Image:
-    height = round(image.height * width / image.width)
-    return image.resize((width, height), Image.Resampling.LANCZOS)
-
-
-def _combine_panels(panel_a: Path, panel_b: Path, out_path: Path) -> None:
-    a = _tight_crop(Image.open(panel_a))
-    b = _tight_crop(Image.open(panel_b))
-    canvas_width = 3300
-    left_margin = 82
-    right_margin = 28
-    panel_width = canvas_width - left_margin - right_margin
-    a = _resize_width(a, int(panel_width * 0.95))
-    b = _resize_width(b, panel_width)
-    top = 18
-    between = 28
-    bottom = 18
-    canvas = Image.new("RGB", (canvas_width, top + a.height + between + b.height + bottom), "white")
-    draw = ImageDraw.Draw(canvas)
-    label_font = _font(58, bold=True)
-    x_a = left_margin + (panel_width - a.width) // 2
-    canvas.paste(a, (x_a, top))
-    draw.text((12, top + 8), "A", fill=(25, 25, 25), font=label_font)
-    y_b = top + a.height + between
-    canvas.paste(b, (left_margin, y_b))
-    draw.text((12, y_b + 8), "B", fill=(25, 25, 25), font=label_font)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_path)
+    source = annotations.loc[annotations.annotation_type.eq("source_group")].copy()
+    if (source.duplicated(["reference_key", "annotation_value"]).any()
+            or set(source.annotation_value) != set(SOURCE_ORDER)
+            or not source.n_samples.ge(0).all()
+            or not source.n_samples.mod(1).eq(0).all()):
+        raise ValueError("Invalid or duplicate source-composition annotations")
+    pivot = source.pivot(index="reference_key", columns="annotation_value",
+                         values="n_samples").fillna(0).astype(int)
+    if set(pivot.index) != set(subtypes.reference_key):
+        raise ValueError("Source annotations do not cover exactly the released subtypes")
+    refs = subtypes.merge(pivot[SOURCE_ORDER], left_on="reference_key",
+                          right_index=True, validate="one_to_one")
+    if (len(refs) != 112 or refs.root.nunique() != 19
+            or int(refs.n_definition_samples.sum()) != 155881
+            or not refs.n_definition_samples.gt(0).all()
+            or not refs[SOURCE_ORDER].sum(axis=1).eq(refs.n_definition_samples).all()):
+        raise ValueError("Reference depths and source annotations do not reconcile")
+    source_depths = source.merge(
+        subtypes[["reference_key", "n_definition_samples"]],
+        on="reference_key", validate="many_to_one",
+    )
+    if not np.allclose(source_depths.fraction,
+                       source_depths.n_samples / source_depths.n_definition_samples):
+        raise ValueError("Source fractions disagree with defining-analysis counts")
+    root_order = [root for root in ROOT_LABELS if root in set(refs.root)]
+    refs["root_order"] = pd.Categorical(refs.root, categories=root_order, ordered=True)
+    refs["layer_order"] = refs.reference_layer.map({"core": 0, "conditional": 1})
+    if refs.root_order.isna().any() or refs.layer_order.isna().any():
+        raise ValueError("Unrecognized reference root or layer")
+    refs["reference_number"] = refs.reference_key.map(reference_number)
+    refs = refs.sort_values(["root_order", "layer_order", "reference_number"]).reset_index(drop=True)
+    refs["plot_position"] = 0.0
+    cursor = 0.0
+    for _, group in refs.groupby("root", sort=False):
+        refs.loc[group.index, "plot_position"] = cursor + np.arange(len(group))
+        cursor += len(group) + 0.9
+    families = counts[PLATFORM_ORDER].sum().rename("n_analyses").to_frame()
+    families["fraction"] = families.n_analyses / families.n_analyses.sum()
+    return {"shape": shape, "platform": platform, "counts": counts,
+            "families": families, "references": refs}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--source-dir",
-        required=True,
-        type=Path,
-        help="Source-data directory used to build the atlas",
-    )
-    parser.add_argument("--shape-proxies", required=True, type=Path, help="Per-analysis segment-derived CNV burden table")
-    parser.add_argument("--out-dir", required=True, type=Path)
-    parser.add_argument("--top-n", type=int, default=10, help="Roots shown individually in main panel A")
-    parser.add_argument("--exclude-roots", default="", help="Optional comma-separated roots to omit")
-    parser.add_argument("--min-samples-per-family", type=int, default=50)
-    parser.add_argument("--low-threshold", type=float, default=0.10)
-    parser.add_argument("--high-threshold", type=float, default=0.20)
-    parser.add_argument(
-        "--platform-metrics",
-        type=Path,
-        help=(
-            "Optional precomputed autosomal platform-consistency TSV. "
-            "Supplying this avoids rescanning the gene-panel cache."
-        ),
-    )
+    parser.add_argument("--atlas-root", type=Path, required=True,
+                        help="Analysis workspace containing figures/preprocess_baseline/figure1")
+    parser.add_argument("--release-dir", type=Path, required=True,
+                        help="Public data release containing atlas/subtypes.tsv and subtype_annotations.tsv")
+    parser.add_argument("--out-dir", type=Path,
+                        help="Default: ATLAS_ROOT/figures/preprocess_baseline/figure1")
     args = parser.parse_args()
-
-    source_dir = args.source_dir.expanduser().resolve()
-    out_dir = args.out_dir.expanduser().resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    exclude_roots = {root.strip() for root in args.exclude_roots.split(",") if root.strip()}
-
-    meta = _load_metadata(source_dir, exclude_roots)
-    counts = _platform_counts(meta)
-    counts_path = out_dir / "figure1_platform_composition_counts.tsv"
-    counts.to_csv(counts_path, sep="\t", index=False)
-
-    panel_a = out_dir / "figure1A_platform_composition_top_roots.png"
-    panel_a_full = out_dir / "figureS1_platform_composition_all_roots.png"
-    _plot_platform_composition(counts, out_path=panel_a, top_n=int(args.top_n))
-    _plot_platform_composition(counts, out_path=panel_a_full, top_n=None)
-
-    shape = _shape_summary(meta, args.shape_proxies.expanduser().resolve())
-    shape_path = out_dir / "figure1B_root_cnv_shape_summary.tsv"
-    shape.to_csv(shape_path, sep="\t", index=False)
-
-    platform_path = out_dir / "figure1B_platform_consistency.tsv"
-    platform_source: str
-    if args.platform_metrics is not None:
-        supplied_path = args.platform_metrics.expanduser().resolve()
-        if not supplied_path.exists():
-            raise FileNotFoundError(
-                f"Missing precomputed platform metrics: {supplied_path}"
-            )
-        platform = pd.read_csv(supplied_path, sep="\t")
-        platform_source = str(supplied_path)
-    elif platform_path.exists():
-        platform = pd.read_csv(platform_path, sep="\t")
-        platform_source = str(platform_path)
-    else:
-        platform = _compute_platform_metrics(
-            meta=meta,
-            cache_dir=source_dir / "gene_panel" / "cache",
-            min_samples_per_family=int(args.min_samples_per_family),
-            low_threshold=float(args.low_threshold),
-            high_threshold=float(args.high_threshold),
-        )
-        platform_source = "computed_from_gene_panel_cache"
-
-    required_platform_columns = set(PLATFORM_METRIC_COLUMNS) - {
-        "feature_scope"
-    }
-    missing_platform_columns = sorted(
-        required_platform_columns - set(platform.columns)
-    )
-    if missing_platform_columns:
-        raise KeyError(
-            "Platform metrics missing columns: "
-            f"{missing_platform_columns}"
-        )
-    if "feature_scope" in platform.columns:
-        scopes = set(platform["feature_scope"].dropna().astype(str))
-        if scopes != {"autosomes"}:
-            raise ValueError(
-                "Platform metrics must use feature_scope=autosomes; "
-                f"found {sorted(scopes)}"
-            )
-    else:
-        print(
-            "[CNVSIM] warning: supplied platform metrics do not record "
-            "feature_scope; recompute before the final release",
-            flush=True,
-        )
-    platform = platform[
-        platform[ROOT_COL].astype(str).isin(set(meta[ROOT_COL].astype(str)))
-    ].copy()
-    platform.to_csv(platform_path, sep="\t", index=False)
-
-    panel_b = out_dir / "figure1B_root_cnv_platform_diagnostics.png"
-    _plot_panel_b(shape=shape, platform=platform, counts=counts, out_path=panel_b)
-
-    combined = out_dir / "figure1_preprocess_overview.png"
-    _combine_panels(panel_a, panel_b, combined)
-
-    manifest = {
-        "source_dir": str(source_dir),
-        "shape_proxies": str(args.shape_proxies.expanduser().resolve()),
-        "cohort_definition": "all tumour analyses in metadata/tumour_analysis_metadata.parquet",
-        "n_tumour_analyses": int(meta[ID_COL].nunique()),
-        "n_roots": int(meta[ROOT_COL].nunique()),
-        "excluded_roots": sorted(exclude_roots),
-        "thresholds": {
-            "min_samples_per_family": int(args.min_samples_per_family),
-            "low_fraction": float(args.low_threshold),
-            "high_fraction": float(args.high_threshold),
-        },
-        "platform_metrics_source": platform_source,
-        "platform_metrics_feature_scope": "autosomes",
-        "outputs": {
-            "panel_a": panel_a.name,
-            "panel_a_all_roots": panel_a_full.name,
-            "panel_b": panel_b.name,
-            "combined": combined.name,
-            "platform_counts": counts_path.name,
-            "shape_summary": shape_path.name,
-            "platform_consistency": platform_path.name,
-        },
-    }
-    (out_dir / "figure1_manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"[OK] tumour analyses: {manifest['n_tumour_analyses']:,}")
-    print(f"[OK] roots: {manifest['n_roots']}")
-    print(f"[OK] wrote {out_dir}")
+    summary_dir = args.atlas_root.expanduser().resolve() / "figures/preprocess_baseline/figure1"
+    release_dir = args.release_dir.expanduser().resolve()
+    output = args.out_dir.expanduser().resolve() if args.out_dir else summary_dir
+    data = load_data(summary_dir, release_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    render(data, output)
+    print("[CNVSIM] Figure 1 complete: 112 subtypes, 155,881 defining analyses")
+    print(f"[CNVSIM] wrote figure1_preprocess_overview.{{pdf,png}} to {output}")
 
 
 if __name__ == "__main__":
