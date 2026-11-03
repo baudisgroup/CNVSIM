@@ -24,6 +24,7 @@ import pandas as pd
 
 WIDTH_MM, HEIGHT_MM = 183.0, 230.0
 BLUE, ORANGE, TEXT = "#2E5EAA", "#D9822B", "#111111"
+OTHER_MATCHED = "#A9C4E6"
 GREY, GRID, GAIN, LOSS = "#E5EAEC", "#E4E9EB", "#F2BE35", "#1F5F93"
 PROVISIONAL = "#DDBB7B"
 ROOTS = {
@@ -237,6 +238,9 @@ def main():
     signatures = pd.read_csv(
         p / "cell_line/signature_evidence/subtype_signature_coverage.tsv", sep="\t"
     )
+    evidence = pd.read_csv(
+        p / "cell_line/signature_evidence/model_signature_evidence.tsv", sep="\t"
+    )
     higher = signatures[
         signatures.track.eq("track2") & signatures.relative_to_root_background.eq("higher")
     ].copy()
@@ -245,9 +249,40 @@ def main():
         selected.recommended_recorded_only.fillna(0) + selected.recommended_mixed.fillna(0)
     ).gt(0)
     assert len(higher) == 2942 and len(selected) == 2210 and int(selected.recorded.sum()) == 1772
+    signature_keys = [
+        "reference_key",
+        "root",
+        "track",
+        "feature",
+        "event",
+        "amplitude",
+        "relative_to_root_background",
+    ]
+    assert not selected.duplicated(signature_keys).any()
+    recorded_keys = evidence.loc[
+        evidence.recorded_profiles.fillna(0).gt(0), signature_keys
+    ].drop_duplicates()
+    selected = selected.merge(
+        recorded_keys.assign(any_matched_recorded=True),
+        on=signature_keys,
+        how="left",
+        validate="one_to_one",
+    )
+    selected["any_matched_recorded"] = selected.any_matched_recorded.eq(True)
+    assert selected.loc[selected.recorded, "any_matched_recorded"].all()
+    selected["other_matched_only"] = selected.any_matched_recorded & ~selected.recorded
+    selected["not_recorded"] = ~selected.any_matched_recorded
+    assert int(selected.other_matched_only.sum()) == 66
+    assert int(selected.not_recorded.sum()) == 372
+    assert selected[["recorded", "other_matched_only", "not_recorded"]].sum(axis=1).eq(1).all()
     events_by_root = (
         selected.groupby("root")
-        .agg(n=("recorded", "size"), recorded=("recorded", "sum"))
+        .agg(
+            n=("recorded", "size"),
+            recorded=("recorded", "sum"),
+            other_matched_only=("other_matched_only", "sum"),
+            not_recorded=("not_recorded", "sum"),
+        )
         .reindex(ROOTS)
         .fillna(0)
         .astype(int)
@@ -318,9 +353,6 @@ def main():
         (11, "loss"): 28,
         (14, "gain"): 2,
     }
-    evidence = pd.read_csv(
-        p / "cell_line/signature_evidence/model_signature_evidence.tsv", sep="\t"
-    )
     all_model_evidence = evidence
     evidence = evidence[
         evidence.reference_key.eq("C25-CTX6")
@@ -455,10 +487,26 @@ def main():
         if not row.n:
             ax.text(50, y, "—", ha="center", va="center", fontsize=6, color="#6E7B82")
             continue
-        value = 100 * row.recorded / row.n
         height = 0.30 if row.n < 10 else 0.55
-        ax.barh(y, value, height=height, color=BLUE, edgecolor="white", lw=0.25)
-        ax.barh(y, 100 - value, left=value, height=height, color=ORANGE, edgecolor="white", lw=0.25)
+        offset = 0.0
+        for count, colour in [
+            (row.recorded, BLUE),
+            (row.other_matched_only, OTHER_MATCHED),
+            (row.not_recorded, ORANGE),
+        ]:
+            width = 100 * count / row.n
+            if count:
+                ax.barh(
+                    y,
+                    width,
+                    left=offset,
+                    height=height,
+                    color=colour,
+                    edgecolor="white",
+                    lw=0.25,
+                )
+            offset += width
+        assert np.isclose(offset, 100)
     for y, row in enumerate(events_by_root.itertuples()):
         y_mm = 15 + 83 * (18.65 - y) / 19.3
         text(fig, 102, y_mm, str(row.n), ha="center", va="center", fontsize=6)
@@ -467,7 +515,7 @@ def main():
         fig,
         63,
         106.5,
-        "Track 2 CNV signatures: 1,772 / 2,210 recorded",
+        "Track 2 CNV signatures (n = 2,210)",
         ha="center",
         va="center",
         fontsize=6.5,
@@ -476,12 +524,13 @@ def main():
     text(fig, 102, 106.5, "n", ha="center", va="center", fontsize=6.5, weight="bold")
     fig.legend(
         handles=[
-            Patch(fc=BLUE, label="Recorded in recommended models"),
-            Patch(fc=ORANGE, label="Not recorded"),
+            Patch(fc=BLUE, label="Recommended (1,772)"),
+            Patch(fc=OTHER_MATCHED, label="Other matched only (+66)"),
+            Patch(fc=ORANGE, label="Not recorded (372)"),
         ],
         loc="center",
         bbox_to_anchor=(60 / WIDTH_MM, 113 / HEIGHT_MM),
-        ncol=2,
+        ncol=3,
         fontsize=6,
         frameon=False,
         handlelength=1,

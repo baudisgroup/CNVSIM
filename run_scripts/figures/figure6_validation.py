@@ -118,9 +118,9 @@ def require_matplotlib_panel_alignment(fig, axes, rows, columns=()):
 
 
 def pair_correspondence(crosstab):
-    """Describe splitting and merging separately on commonly assigned records.
+    """Describe splitting and merging separately on commonly assigned analyses.
 
-    These are descriptive record-pair fractions, not independent observations,
+    These are descriptive analysis-pair fractions, not independent observations,
     diagnostic accuracies or chance-adjusted validation scores.
     """
     choose2 = lambda values: values * (values - 1) // 2
@@ -403,7 +403,7 @@ def main():
                 mfc="white",
                 mec=BLUE,
                 ms=3.5,
-                label="Small released subtype (<10 records)",
+                label="Released subtype with <10 common analyses",
             ),
         ],
         loc="center",

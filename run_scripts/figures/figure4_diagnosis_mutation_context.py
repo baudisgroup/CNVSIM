@@ -154,98 +154,69 @@ def load_data(release_dir):
 
 
 
-DIAGNOSIS_LABELS = {
-    "NCIT:C3512": "Lung adenocarcinoma",
-    "NCIT:C2919": "Prostate adenocarcinoma",
-    "NCIT:C4349": "Colon adenocarcinoma",
-    "NCIT:C4017": "Breast ductal carcinoma",
-    "NCIT:C3058": "Glioblastoma",
-    "NCIT:C9245": "Invasive breast carcinoma",
-    "NCIT:C39851": "Bladder urothelial carcinoma",
-    "NCIT:C4194": "Invasive breast carcinoma, NST",
-    "NCIT:C8294": "Pancreatic adenocarcinoma",
-    "NCIT:C2926": "Lung non-small cell carcinoma",
-    "NCIT:C4004": "Gastric adenocarcinoma",
-    "NCIT:C27753": "Acute myeloid leukemia, NOS",
-    "NCIT:C6287": "Endometrioid adenocarcinoma",
-    "NCIT:C3099": "Hepatocellular carcinoma",
-    "NCIT:C80280": "DLBCL, NOS",
-    "NCIT:C3510": "Cutaneous melanoma",
-    "NCIT:C4025": "Esophageal adenoca.",
-    "NCIT:C3270": "Neuroblastoma",
-    "NCIT:C8181": "Oropharyngeal SCC",
-    "NCIT:C4035": "Papillary thyroid carcinoma",
-    "NCIT:C3868": "GIST",
-    "NCIT:C9145": "Osteosarcoma",
+ROOT_LABELS = {
+    "C00_C14": "Oral/pharynx",
+    "C15_C17_C21_C26": "Other digestive",
+    "C16": "Stomach",
+    "C18_C20": "Colon/rectum",
+    "C22_C24": "Liver/biliary",
+    "C25": "Pancreas",
+    "C30_C39": "Respiratory",
+    "C40_C41_C48": "Bone/connective",
+    "C42": "Haematopoietic",
+    "C44": "Skin",
+    "C49": "Soft tissue",
+    "C50": "Breast",
+    "C51_C58": "Female genital",
+    "C60_C63": "Male genital",
+    "C64_C68": "Urinary tract",
+    "C69_C70_C72": "Eye/CNS",
+    "C71": "Brain",
+    "C73_C75": "Endocrine",
+    "C77": "Lymph nodes",
 }
 
 
-def load_diagnosis_data(release_dir):
-    """Aggregate complete recorded NCIt labels; never export individual IDs."""
-    paths = {
-        "assignments": release_dir / "atlas/analysis_assignments.parquet",
-        "metadata": release_dir / "source_data/source_file/metadata/tumour_analysis_metadata.parquet",
-        "subtypes": release_dir / "atlas/subtypes.tsv",
-    }
-    assignments = pd.read_parquet(paths["assignments"], columns=[
-        "analysis_id", "root", "assigned_reference_key", "assignment_method"])
-    metadata = pd.read_parquet(paths["metadata"], columns=[
-        "analysis_id", "histological_diagnosis_id", "histological_diagnosis_label"])
-    subtypes = pd.read_csv(paths["subtypes"], sep="\t").set_index("reference_key")
-    if assignments.analysis_id.duplicated().any() or metadata.analysis_id.duplicated().any():
-        raise ValueError("Non-unique analysis identifiers in diagnosis inputs")
-    defining = assignments.loc[assignments.assignment_method.isin([
-        "direct_anchor", "direct_conditional_definition"])].copy()
-    observed = defining.groupby("assigned_reference_key").size().reindex(subtypes.index)
-    if len(defining) != 155881 or len(observed) != 112 or not observed.eq(subtypes.n_definition_samples).all():
-        raise ValueError("Definition-only accounting disagrees with released subtype counts")
-    expected_roots = defining.assigned_reference_key.map(subtypes.root)
-    if not defining.root.eq(expected_roots).all():
-        raise ValueError("A diagnosis record crosses the subtype's anatomical root")
-    data = defining.merge(metadata, on="analysis_id", validate="one_to_one", how="left")
-    if data[["histological_diagnosis_id", "histological_diagnosis_label"]].isna().any().any():
-        raise ValueError("A defining analysis lacks its recorded diagnosis")
-    keys = ["root", "histological_diagnosis_id"]
-    aliases = data.groupby(keys + ["histological_diagnosis_label"], as_index=False).size()
-    aliases = aliases.sort_values(keys + ["size", "histological_diagnosis_label"],
-                                  ascending=[True, True, False, True], kind="stable")
-    canonical = aliases.drop_duplicates(keys)[keys + ["histological_diagnosis_label"]]
-    grouped = data.groupby(keys + ["assigned_reference_key"],
-                           as_index=False, sort=True).size().rename(columns={
-                               "size": "n_analyses", "assigned_reference_key": "reference_key"})
-    grouped = grouped.merge(canonical, on=keys, validate="many_to_one")
-    summary = grouped.groupby(keys + ["histological_diagnosis_label"], as_index=False).agg(
+def load_root_composition(release_dir):
+    """Use every released subtype's defining count, pooled over diagnoses."""
+    composition = pd.read_csv(release_dir / "atlas/subtypes.tsv", sep="\t")
+    composition = composition[["root", "reference_key", "n_definition_samples"]].rename(
+        columns={"n_definition_samples": "n_analyses"})
+    if len(composition) != 112 or composition.reference_key.duplicated().any():
+        raise ValueError("Expected one defining count for every released subtype")
+    if (not composition.n_analyses.gt(0).all()
+            or not np.equal(composition.n_analyses, np.floor(composition.n_analyses)).all()
+            or int(composition.n_analyses.sum()) != 155881):
+        raise ValueError("Unexpected reference-defining analysis counts")
+    summary = composition.groupby("root", as_index=False).agg(
         n_analyses=("n_analyses", "sum"), n_subtypes=("reference_key", "nunique"),
         largest_subtype_n=("n_analyses", "max"))
-    summary = summary.sort_values(["n_analyses", "root", "histological_diagnosis_id"],
-                                  ascending=[False, True, True], kind="stable")
-    top = summary.drop_duplicates("root").copy().reset_index(drop=True)
-    top["display_label"] = top.histological_diagnosis_id.map(DIAGNOSIS_LABELS)
-    if len(top) != 19 or set(top.root) != set(subtypes.root) or top.display_label.isna().any():
-        raise ValueError("Review the display labels for the objectively ranked diagnoses")
-    top["display_order"] = np.arange(len(top))
-    composition = grouped.merge(top[keys + ["display_order"]], on=keys, validate="many_to_one")
+    summary = summary.sort_values(["n_analyses", "root"], ascending=[False, True],
+                                  kind="stable").reset_index(drop=True)
+    summary["display_label"] = summary.root.map(ROOT_LABELS)
+    if len(summary) != 19 or set(summary.root) != set(ROOT_LABELS):
+        raise ValueError("Expected all 19 anatomical reference roots")
+    summary["display_order"] = np.arange(len(summary))
+    composition = composition.merge(summary[["root", "display_order"]], on="root",
+                                    validate="many_to_one")
     composition = composition.sort_values(["display_order", "n_analyses", "reference_key"],
                                           ascending=[True, False, True], kind="stable")
-    composition["subtype_rank"] = composition.groupby(keys).cumcount() + 1
-    totals = composition.groupby(keys).n_analyses.transform("sum")
+    composition["subtype_rank"] = composition.groupby("root").cumcount() + 1
+    totals = composition.groupby("root").n_analyses.transform("sum")
     composition["fraction"] = composition.n_analyses / totals
-    if not np.allclose(composition.groupby(keys).fraction.sum(), 1):
-        raise ValueError("A displayed diagnosis does not sum to 100 percent")
-    observed_counts = composition.groupby(keys).size()
-    if not observed_counts.eq(top.set_index(keys).n_subtypes.reindex(observed_counts.index)).all():
-        raise ValueError("A nonzero subtype segment was lost")
-    top["largest_subtype_fraction"] = top.largest_subtype_n / top.n_analyses
-    return top, composition
+    if not np.allclose(composition.groupby("root").fraction.sum(), 1):
+        raise ValueError("A root's defining-analysis fractions do not sum to one")
+    summary["largest_subtype_fraction"] = summary.largest_subtype_n / summary.n_analyses
+    return summary, composition
 
 
-def draw_diagnosis_composition(fig, top, composition):
-    axis = axes_mm(fig, 48, 142, 44, 78, "A_diagnosis_composition")
+def draw_root_composition(fig, top, composition):
+    axis = axes_mm(fig, 48, 142, 44, 78, "A_root_composition")
     axis.set_xlim(0, 100)
     axis.set_ylim(len(top)-0.5, -0.5)
     axis.set_yticks([])
     axis.set_xticks([0, 50, 100])
-    axis.set_xlabel("CNV analyses within diagnosis (%)", labelpad=3, fontsize=6.5)
+    axis.set_xlabel("Defining analyses within root (%)", labelpad=3, fontsize=6.5)
     for side in ["top", "right", "left"]:
         axis.spines[side].set_visible(False)
     dark = np.asarray(matplotlib.colors.to_rgb(COMPOSITION_DARK))
@@ -261,7 +232,7 @@ def draw_diagnosis_composition(fig, top, composition):
                       color=color, edgecolor="white", linewidth=0.3)
             offset += width
         if not np.isclose(offset, 100):
-            raise ValueError("A rendered diagnosis bar does not reach 100 percent")
+            raise ValueError("A rendered root bar does not reach 100 percent")
         y = 220 - (index+0.5)*78/len(top)
         short_root = {
             "C15_C17_C21_C26": "C15/C17/C21/C26",
@@ -270,7 +241,7 @@ def draw_diagnosis_composition(fig, top, composition):
         }.get(row.root, row.root.replace("_", "–"))
         text_mm(fig, 3, y, f"{short_root} · {row.display_label}", fontsize=6, va="center")
         text_mm(fig, 99, y, f"{row.n_analyses:,}", fontsize=6, ha="center", va="center")
-    text_mm(fig, 99, 224, "Analyses", fontsize=6, ha="center", va="center")
+    text_mm(fig, 99, 224, "Defining\nanalyses", fontsize=6, ha="center", va="center")
     return axis
 
 
@@ -502,7 +473,7 @@ def main() -> None:
                               + ", ".join(str(path) for path in existing))
     release_dir = args.release_dir.expanduser().resolve()
     focus, all_results, tcga = load_data(release_dir)
-    top, composition = load_diagnosis_data(release_dir)
+    top, composition = load_root_composition(release_dir)
     evaluable = all_results.loc[all_results[MODEL_STATUS_COLUMNS].eq("estimable").all(axis=1)]
     if len(evaluable) != 3951 or evaluable.target_subtype.nunique() != 81:
         raise ValueError("Unexpected complete three-model evaluation scope")
@@ -510,7 +481,7 @@ def main() -> None:
     text_mm(fig, 3, 227, "A", fontsize=10, weight="bold", va="center")
     text_mm(fig, 106, 227, "C", fontsize=10, weight="bold", va="center")
     text_mm(fig, 3, 126, "B", fontsize=10, weight="bold", va="center")
-    axes = [draw_diagnosis_composition(fig, top, composition), draw_cross_cohort(fig, tcga)]
+    axes = [draw_root_composition(fig, top, composition), draw_cross_cohort(fig, tcga)]
     records = []
     for block in BLOCKS:
         axis, rr, _ = draw_diagnosis_block(fig, focus, all_results, block)
