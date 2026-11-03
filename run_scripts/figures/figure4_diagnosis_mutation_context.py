@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render Figure 4: diagnostic organization and accompanying mutation contexts.
+"""Render Figure 4: reference subtype composition and mutation contexts.
 
 Inputs come from the frozen CNVSIM v1.0.1 public data release. By default,
 outputs are ATLAS_ROOT/figures/figure4/Figure4.pdf and Figure4.png. Pass
@@ -155,25 +155,25 @@ def load_data(release_dir):
 
 
 ROOT_LABELS = {
-    "C00_C14": "Oral/pharynx",
-    "C15_C17_C21_C26": "Other digestive",
-    "C16": "Stomach",
-    "C18_C20": "Colon/rectum",
-    "C22_C24": "Liver/biliary",
-    "C25": "Pancreas",
-    "C30_C39": "Respiratory",
-    "C40_C41_C48": "Bone/connective",
-    "C42": "Haematopoietic",
-    "C44": "Skin",
-    "C49": "Soft tissue",
-    "C50": "Breast",
-    "C51_C58": "Female genital",
-    "C60_C63": "Male genital",
-    "C64_C68": "Urinary tract",
-    "C69_C70_C72": "Eye/CNS",
-    "C71": "Brain",
-    "C73_C75": "Endocrine",
-    "C77": "Lymph nodes",
+    "C00_C14": "C00-C14  Oral/pharynx",
+    "C15_C17_C21_C26": "C15/C17/C21/C26  Other digestive",
+    "C16": "C16  Stomach",
+    "C18_C20": "C18-C20  Colon/rectum",
+    "C22_C24": "C22-C24  Liver/biliary",
+    "C25": "C25  Pancreas",
+    "C30_C39": "C30-C39  Respiratory",
+    "C40_C41_C48": "C40/C41/C48  Bone/connective",
+    "C42": "C42  Haematopoietic",
+    "C44": "C44  Skin",
+    "C49": "C49  Soft tissue",
+    "C50": "C50  Breast",
+    "C51_C58": "C51-C58  Female genital",
+    "C60_C63": "C60-C63  Male genital",
+    "C64_C68": "C64-C68  Urinary tract",
+    "C69_C70_C72": "C69/C70/C72  Eye/CNS",
+    "C71": "C71  Brain",
+    "C73_C75": "C73-C75  Endocrine",
+    "C77": "C77  Lymph nodes"
 }
 
 
@@ -234,12 +234,7 @@ def draw_root_composition(fig, top, composition):
         if not np.isclose(offset, 100):
             raise ValueError("A rendered root bar does not reach 100 percent")
         y = 220 - (index+0.5)*78/len(top)
-        short_root = {
-            "C15_C17_C21_C26": "C15/C17/C21/C26",
-            "C40_C41_C48": "C40/C41/C48",
-            "C69_C70_C72": "C69/C70/C72",
-        }.get(row.root, row.root.replace("_", "–"))
-        text_mm(fig, 3, y, f"{short_root} · {row.display_label}", fontsize=6, va="center")
+        text_mm(fig, 46, y, row.display_label, fontsize=6, ha="right", va="center")
         text_mm(fig, 99, y, f"{row.n_analyses:,}", fontsize=6, ha="center", va="center")
     text_mm(fig, 99, 224, "Defining\nanalyses", fontsize=6, ha="center", va="center")
     return axis
@@ -503,7 +498,7 @@ def main() -> None:
     if len(discordant) != 4:
         raise ValueError("Unexpected raw/adjusted direction differences")
     out.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out/"Figure4.pdf", metadata={"Title": "Diagnostic organization and mutation contexts of CNV subtypes"})
+    fig.savefig(out/"Figure4.pdf", metadata={"Title": "Reference subtype composition and accompanying mutation contexts"})
     fig.savefig(out/"Figure4.png", dpi=400)
     plt.close(fig)
     print("[CNVSIM] Figure 4 complete: 19 roots; 45 associations; 14 TCGA comparisons")

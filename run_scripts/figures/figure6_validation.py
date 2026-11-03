@@ -356,7 +356,10 @@ def main():
     text(fig, 51.5, 80, "Assigned: 77.6%", ha="center", va="center", fontsize=6.6, weight="bold")
     axes.append(ax)
     caxes = [ax]
-    text(fig, 75.5, 80, "Common n", ha="center", va="center", fontsize=6)
+    text(
+        fig, 75.5, 80, "Compared\nanalyses (n)",
+        ha="center", va="center", fontsize=6, linespacing=1.1,
+    )
     text(fig, 174, 80, "Released\n→ rebuilt", ha="center", va="center", fontsize=6, linespacing=1.1)
     for y, row in enumerate(pair.itertuples()):
         y_mm = 11 + 64 * (18.65 - y) / 19.3
@@ -403,7 +406,7 @@ def main():
                 mfc="white",
                 mec=BLUE,
                 ms=3.5,
-                label="Released subtype with <10 common analyses",
+                label="Released subtype with <10 compared analyses",
             ),
         ],
         loc="center",
