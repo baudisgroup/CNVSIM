@@ -331,7 +331,6 @@ def draw_cross_cohort(fig, tcga):
     return axis
 
 
-FIGURE5_SUBTYPES = {"C50-CTX0", "C50-CTX4", "C18_C20-CTX1", "C18_C20-CTX5", "C71-CTX2"}
 CELL_WIDTH_MM = 12.0
 CELL_HEIGHT_MM = 5.2
 BLOCKS = (
@@ -409,9 +408,8 @@ def draw_diagnosis_block(fig, focus, all_results, spec):
         text_mm(fig, spec["x"]+(column+0.5)*CELL_WIDTH_MM, spec["top"]+3.4,
                 gene, fontsize=6.1, fontstyle="italic", ha="center", va="center")
     for row, subtype in enumerate(subtypes):
-        mark = "†" if subtype in FIGURE5_SUBTYPES else ""
         text_mm(fig, spec["x"]-2.2, spec["top"]-(row+0.5)*CELL_HEIGHT_MM,
-                subtype.rsplit("-", 1)[1]+mark, fontsize=6.1, ha="right", va="center")
+                subtype.rsplit("-", 1)[1], fontsize=6.1, ha="right", va="center")
     lookup = {key_of(row): row for row in all_results.itertuples(index=False)}
     selected = {key_of(row): row for row in frame.itertuples(index=False)}
     records = []

@@ -406,25 +406,6 @@ analysis-level details for a cell-line lookup. Recommended models are ranked by
 replicate evidence, assignment consistency and coverage, and calibrated
 distance to the matched subtype.
 
-## Render Figure 4
-
-The Figure 4 runner uses the v1.0.1 public data release to show diagnosis-to-CNV
-subtype distributions, within-diagnosis mutation associations, and the TCGA
-cross-cohort comparison. It reads released results without refitting models and
-uses the dependencies already listed in `requirements.txt` and `environment.yml`.
-
-```bash
-python run_scripts/figures/figure4_diagnosis_mutation_context.py \
-  --atlas-root /path/to/CNVSIM_atlas_v1 \
-  --release-dir "$CNVSIM_DATA" \
-  --overwrite
-```
-
-Outputs are `figures/figure4/Figure4.pdf` and `Figure4.png` under `--atlas-root`.
-Only these two files are generated; no intermediate tables or panel images are
-written. Use `--out-dir /path/to/figure4` to override the destination, or to run
-without `--atlas-root`. Existing Figure 4 files require `--overwrite`.
-
 ## Repository layout
 
 | Path | Purpose |
