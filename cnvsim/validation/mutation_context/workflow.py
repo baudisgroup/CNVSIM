@@ -8,7 +8,7 @@ import sys
 import pandas as pd
 import pyarrow.parquet as pq
 
-from . import association, center_consistency, sensitivity, variant_description, manifest
+from . import association, center_consistency, sensitivity, manifest
 
 
 def configure(files):
@@ -19,10 +19,9 @@ def configure(files):
             raise ValueError(f"Output overlaps input {key}")
     for attr, key in {"RAW": "genie_maf", "SAMPLES": "genie_samples", "COVERAGE": "assay_coverage", "ANALYSIS_CONFIG": "analysis_config", "CONTRASTS": "contrasts", "SHAPE": "shape", "FEATURES": "features_dir"}.items():
         setattr(association, attr, files[key])
-    for name, mod in [("association", association), ("center_consistency", center_consistency), ("sensitivity", sensitivity), ("variant_description", variant_description)]:
+    for name, mod in [("association", association), ("center_consistency", center_consistency), ("sensitivity", sensitivity)]:
         mod.HERE = out / name
     center_consistency.PRIOR = sensitivity.PRIOR = association.HERE
-    variant_description.PRIOR = sensitivity.HERE
     return files
 
 
@@ -78,7 +77,7 @@ def initialize(files):
     print(json.dumps({**check, "manifest": str(out / manifest.NAME)}, indent=2))
 
 
-def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
+def execute(stage, run_dir, workers=1, export_dir=None):
     if workers < 1:
         raise ValueError("workers must be positive")
     run = Path(run_dir).expanduser().resolve()
@@ -89,7 +88,7 @@ def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
         if stage in data["stages"]:
             raise FileExistsError("Stage already attempted; preserve its record and use a fresh run")
         dependencies = {"association-prepare": ["check-inputs"], "association-analyze": ["association-prepare"],
-                        "center-consistency": ["association-analyze"], "sensitivity": ["association-analyze"], "variant-description": ["sensitivity"],
+                        "center-consistency": ["association-analyze"], "sensitivity": ["association-analyze"],
                         "export-tables": ["association-analyze", "center-consistency", "sensitivity"]}
         for required in dependencies[stage]:
             if data["stages"].get(required, {}).get("status") != "COMPLETE":
@@ -97,18 +96,6 @@ def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
         files = configure(data["inputs"])
         if files["output_dir"] != run:
             raise ValueError("Run directory differs from its manifest")
-        if stage == "variant-description":
-            if protein_fasta_dir is None:
-                raise ValueError("variant_description requires --protein-fasta-dir")
-            variant_description.FASTA_DIR = Path(protein_fasta_dir).expanduser().resolve()
-            if run == variant_description.FASTA_DIR or run in variant_description.FASTA_DIR.parents or variant_description.FASTA_DIR in run.parents:
-                raise ValueError("Protein inputs overlap the run directory")
-            for accession, *_ in variant_description.REF.values():
-                path = variant_description.FASTA_DIR / (accession + ".fasta")
-                if not path.is_file():
-                    raise FileNotFoundError(path)
-        elif protein_fasta_dir is not None:
-            raise ValueError("Protein FASTA is used only by variant_description")
         if stage != "export-tables":
             folder = run / ("association" if stage.startswith("association-") else stage.replace("-", "_"))
             if stage != "association-analyze":
@@ -123,8 +110,6 @@ def execute(stage, run_dir, workers=1, export_dir=None, protein_fasta_dir=None):
                 center_consistency.run(workers)
             elif stage == "sensitivity":
                 sensitivity.run(workers)
-            elif stage == "variant-description":
-                variant_description.main(refresh=True)
             elif stage == "export-tables":
                 from .export import export_tables
                 export_tables(run, export_dir)
