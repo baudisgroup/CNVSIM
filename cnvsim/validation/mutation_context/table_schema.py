@@ -25,10 +25,8 @@ CENTER_COLUMNS = KEY + COUNTS + ['center_group', 'in_focus_45', 'local_cnv_missi
 SENSITIVITY_COLUMNS = KEY + COUNTS + ['in_focus_45'] + [group + '_' + field for group in ['complete', 'restricted'] for field in COUNTS] + ['local_cnv_missing_n'] + model_columns(SENSITIVITY_MODELS, regression=True) + ['sensitivity_status']
 CENTER_FOCUS_COLUMNS = KEY + ['main_primary_or'] + [center + '_' + field for center in ['MSK', 'non_MSK'] for field in COUNTS + ['primary_status', 'primary_reason', 'primary_or', 'primary_ci_low', 'primary_ci_high', 'primary_q']] + [name + '_center_direction' for name in MODELS] + ['center_consistency_status', 'heterogeneity_status', 'heterogeneity_reason', 'heterogeneity_p', 'heterogeneity_interaction_or', 'heterogeneity_q_45']
 OVERVIEW_COLUMNS = KEY + COUNTS + ['primary_informative_target_n', 'primary_informative_control_n', 'primary_or', 'adjusted_association', 'primary_ci_low', 'primary_ci_high', 'primary_q', 'combined_or', 'combined_ci_low', 'combined_ci_high', 'combined_q', 'sensitivity_status', 'center_consistency_status', 'MSK_primary_or', 'non_MSK_primary_or', 'heterogeneity_q_45']
-VARIANT_KEY = KEY + ['population', 'group']
 
-# These are the only result tables exposed by export-tables. Detailed protein
-# positions/changes remain local run outputs until a separate release decision.
+# These are the only result tables exposed by export-tables.
 TABLE_COLUMNS = {
     'association/cohort_reconstruction_audit.tsv': ['root', 'diagnosis', 'gene', 'samples', 'comparisons', 'local_gene_available', 'missing_local_cnv'],
     'association/conditional_associations.tsv': ASSOCIATION_COLUMNS,
@@ -37,9 +35,6 @@ TABLE_COLUMNS = {
     'center_consistency/center_sample_counts.tsv': ['root', 'CENTER', 'center_group', 'unique_evaluable_analyses'],
     'sensitivity/CONTEXT_RESULTS.tsv': SENSITIVITY_COLUMNS,
     'sensitivity/sample_type_coverage.tsv': ['SAMPLE_TYPE', 'SAMPLE_TYPE_DETAILED', 'unique_analyses'],
-    'variant_description/COHORT_COUNTS.tsv': VARIANT_KEY + ['evaluable_samples', 'mutation_carriers', 'variant_observations', 'distinct_genomic_alleles', 'mutation_rate', 'primary_samples', 'metastasis_samples', 'coordinate_unknown_variants'],
-    'variant_description/CATEGORY_COUNTS.tsv': VARIANT_KEY + ['category', 'variant_observations', 'carriers', 'total_mutation_carriers', 'total_variant_observations', 'evaluable_samples', 'carrier_fraction_of_mutated', 'carrier_fraction_of_evaluable', 'variant_fraction'],
-    'variant_description/DOMAIN_RELATION_COUNTS.tsv': VARIANT_KEY + ['category', 'domain_relation', 'variant_observations', 'carriers'],
     'reader/FOCUS_45_OVERVIEW.tsv': OVERVIEW_COLUMNS,
 }
 
@@ -105,24 +100,6 @@ DESCRIPTIONS = {
     'SAMPLE_TYPE': 'Reported primary, metastatic or other sample-type category.',
     'SAMPLE_TYPE_DETAILED': 'Detailed sample-type annotation supplied in the metadata.',
     'unique_analyses': 'Number of distinct evaluable CNV analyses with these sample-type annotations.',
-    'population': 'main_analysis_samples uses the evaluable association cohort; adjusted_model_samples uses the combined-model informative subset.',
-    'group': 'Target subtype or other eligible core subtypes (control) within the same diagnosis.',
-    'evaluable_samples': 'Number of samples in this population and group.',
-    'mutation_carriers': 'Number of samples carrying a qualifying reported mutation in this gene.',
-    'variant_observations': 'Number of distinct sample-allele observations; one carrier may contribute several.',
-    'distinct_genomic_alleles': 'Number of distinct genomic alleles after removing the sample identifier.',
-    'mutation_rate': 'Mutation carriers divided by evaluable samples.',
-    'primary_samples': 'Number of samples annotated as Primary.',
-    'metastasis_samples': 'Number of samples annotated as Metastasis.',
-    'coordinate_unknown_variants': 'Number of variant observations without a usable checked protein coordinate.',
-    'category': 'Gene-specific descriptive variant class; definitions are given below.',
-    'carriers': 'Number of distinct mutation carriers in this category or category/domain combination.',
-    'total_mutation_carriers': 'All mutation carriers in this gene, population and group.',
-    'total_variant_observations': 'All variant observations in this gene, population and group.',
-    'carrier_fraction_of_mutated': 'Category carriers divided by all mutation carriers in this gene and group.',
-    'carrier_fraction_of_evaluable': 'Category carriers divided by all evaluable samples in this group.',
-    'variant_fraction': 'Category variant observations divided by all variant observations in this gene and group.',
-    'domain_relation': 'Position relative to the annotated domain: before, within, after, overlap or unknown.',
 }
 MODEL_DESCRIPTIONS = {
     'primary': 'Assay, FGA quintile and binary local-CNV conditioned exact test with a CMH odds ratio.',

@@ -50,7 +50,7 @@ def readme(frames):
         '# Mutation association results', '',
         'Start with reader/FOCUS_45_OVERVIEW.tsv. Each association row compares mutation odds in one target CNV subtype with other eligible core subtypes within the same root and diagnosis.', '',
         'The pipeline reads only four comparison keys and four cohort counts from the supplied comparison plan. Counts are reconstructed from metadata, panel coverage and qualifying reported MAF calls. Upstream test statistics are neither required nor copied into results.', '',
-        'Generation order: association-prepare reconstructs cohorts; association-analyze fits three main models; center-consistency and sensitivity separately follow that analysis; optional variant-description uses the sensitivity sample sets; export-tables joins current results without refitting or recalculating FDR.', '',
+        'Generation order: association-prepare reconstructs cohorts; association-analyze fits three main models; center-consistency and sensitivity separately follow that analysis; export-tables joins current results without refitting or recalculating FDR.', '',
         'Target/control counts are unadjusted evaluable counts. Informative counts identify the subset contributing to a model. CENTER_RESULTS counts refer to that center group. Cohort-audit, center-count and sample-type tables have their own grouped counting units.', '',
         'adjusted_association sits next to primary_or: enriched means adjusted OR > 1, depleted means adjusted OR < 1, and neutral means OR = 1. These labels describe mutation odds after conditioning on assay, FGA bin and local gene CNV. They can disagree with the crude proportions in target_mutated/target_n and control_mutated/control_n. They do not describe CNV gain/loss or significance of the combined model. An odds ratio is not a mutation-rate ratio.', '',
         'status=not_estimable means the model did not meet the analysis criteria. Its OR, P and confidence limits are blank. Support counts and failure reasons remain available. A blank is not zero.', '',
@@ -58,9 +58,7 @@ def readme(frames):
         'Model *_q values use BH FDR across the full 9,582 comparisons, separately for each model and each center group where applicable. Non-estimable comparisons enter with p=1, so their q=1 is bookkeeping, not evidence of no association. heterogeneity_q_45 uses a separate family of 45 interaction tests.', '',
         'The main 45 associations have three estimable models with q<0.05 and matching directions. sensitivity_status distinguishes supported_across_context_checks, supported_with_unestimable_sensitivity, supported_but_not_all_sensitivities, no_detected_adjusted_association, not_estimable, direction_not_estimable and direction_inconsistent. A supported adjusted result must agree with the current main-analysis direction.', '',
         'Center consistency uses subdivisions of the same discovery cohort. non_MSK pools all non-MSK contributors. Direction agreement is not a significance test or independent replication; lack of detected heterogeneity is not proof that effects are equal.', '',
-        'Variant descriptions concern selected ESR1, GATA3 and EP300 follow-up cases, not new association tests. main_analysis_samples and adjusted_model_samples are different populations. Carriers count samples with reported variants; variant_observations count sample-allele observations. Carrier counts can overlap between categories.', '',
-        'ESR1 categories distinguish Y537/D538 missense variants, other ligand-binding-domain missense variants (311-547), and variants outside that domain. GATA3 categories distinguish splice calls, zinc-finger-2 frameshifts (317-341), predicted truncation/extension and other classes. EP300 categories distinguish truncating/splice calls and missense variants inside/outside the HAT domain (1287-1663). Annotation-unknown records lack verified protein interpretation.', '',
-        'Eight tables are exported without variant description, eleven with it. POSITION_COUNTS and PROTEIN_CHANGE_COUNTS remain in the local run only. Raw MAF, sample linkage, sample-level caches and local paths are not exported. These are release candidates; data-package and supplementary use require the same release review.', '',
+        'Eight tables are exported, plus a TCGA comparison table when that analysis is available. Raw MAF, sample linkage, sample-level caches and local paths are not exported. These are release candidates; data-package and supplementary use require the same release review.', '',
         '## Models', '', '| Prefix | Meaning |', '|---|---|',
     ]
     lines.extend(f'| {name} | {meaning} |' for name, meaning in MODEL_DESCRIPTIONS.items())
@@ -104,12 +102,9 @@ def export_tables(run_dir, out_dir):
     for stage in ['association-prepare', 'association-analyze', 'center-consistency', 'sensitivity']:
         if record['stages'].get(stage, {}).get('status') != 'COMPLETE':
             raise ValueError(f'Stage {stage} is not complete')
-    variant_status = record['stages'].get('variant-description', {}).get('status')
-    if variant_status not in (None, 'COMPLETE'):
-        raise ValueError('Variant description was attempted but did not complete')
     frames = {}
     for rel, columns in TABLE_COLUMNS.items():
-        if rel.startswith('reader/') or (rel.startswith('variant_description/') and variant_status != 'COMPLETE'):
+        if rel.startswith('reader/'):
             continue
         path = (run / rel).with_suffix('.parquet') if rel in PARQUET_TABLES else run / rel
         frame = pd.read_parquet(path) if path.suffix == '.parquet' else pd.read_csv(path, sep='\t', float_precision='round_trip')
@@ -145,6 +140,6 @@ def export_tables(run_dir, out_dir):
     (out / 'README.md').write_text(documentation)
     data = run_manifest.read(run)
     data['exports'] = {'output_dir': str(out), 'status': 'AGGREGATE_EXPORT_COMPLETE_NOT_PUBLISHED',
-                       'statistics_refitted': False, 'variants_included': variant_status == 'COMPLETE', 'files': inventory}
+                       'statistics_refitted': False, 'files': inventory}
     run_manifest.write(run, data)
     print(json.dumps({'status': data['exports']['status'], 'tables': len(inventory), 'output_dir': str(out)}, indent=2))
