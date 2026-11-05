@@ -52,7 +52,7 @@ are distributed separately as the **CNVSIM Atlas data release**:
 - Code: <https://github.com/baudisgroup/CNVSIM>
 - Data releases (all versions): <https://doi.org/10.5281/zenodo.23642833>
 - Previous data release (v1.0.0): <https://doi.org/10.5281/zenodo.23642834>
-- v1.0.1 data release (`CNVSIM_v1.0.1_public`): includes
+- v1.0.1 data release (`CNVSIM_v1.0.1_public`): <https://doi.org/10.5281/zenodo.23982370>. Includes
   `cell_line/signature_evidence/`, `validation/mutation_context/`,
   `validation/source_holdout/`, and updated `supplementary/` files.
 
