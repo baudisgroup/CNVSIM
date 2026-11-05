@@ -38,6 +38,10 @@ application use cases:
 
 <p align="center"><em>CNVSIM atlas construction and projection workflow.</em></p>
 
+## Preprint
+
+The manuscript describing CNVSIM is available as a preprint on [bioRxiv](https://www.biorxiv.org/content/10.64898/2026.10.26.761332v1).
+
 ## Code and data
 
 This repository contains the CNVSIM source code, configuration files,
@@ -46,8 +50,9 @@ projection bundle, validation summaries, source data, and cell-line catalogue
 are distributed separately as the **CNVSIM Atlas data release**:
 
 - Code: <https://github.com/baudisgroup/CNVSIM>
-- Published v1.0.0 data release: <https://doi.org/10.5281/zenodo.23642834>
-- Local v1.0.1 candidate data release (`CNVSIM_v1.0.1_public`): adds
+- Data releases (all versions): <https://doi.org/10.5281/zenodo.23642833>
+- Previous data release (v1.0.0): <https://doi.org/10.5281/zenodo.23642834>
+- v1.0.1 data release (`CNVSIM_v1.0.1_public`): includes
   `cell_line/signature_evidence/`, `validation/mutation_context/`,
   `validation/source_holdout/`, and updated `supplementary/` files.
 
